@@ -90,9 +90,14 @@
     <a href="examples.html">Walkthrough</a> for real captured proof.
 </p>
 
-<h2>What's next</h2>
+<h2>Phase IX: capabilities &amp; security hardening</h2>
 <ul>
-<li><strong>Phase IX — capability/permission system</strong> on top of the handle table, then security hardening (NX/ASLR/sandboxing on the still fully user-accessible shared identity-map region).</li>
+<li><strong>25: real per-handle rights on Channel</strong> <span class="tag">done</span> — Phase IX's first step, closing the exact gap milestone 23/24 flagged: a valid channel handle could be used for any operation the channel supported, with no per-handle ownership. A new <code>Handle.rights</code> bitmask (fixed forever at grant time) and a new <code>OBJ_CHANNEL</code> object type wrap <code>Channel</code> in the handle table for the first time. <code>channelSend</code>/<code>channelReceive</code> now resolve a real handle and check its rights before touching the underlying channel; a new <code>openChannel</code> syscall is the one place an index becomes a handle — and always grants receive-only rights, a real and deliberate policy choice, not a placeholder. Verified in QEMU: a fresh boot's <code>Channel.open()</code> succeeds, an immediate unauthorized <code>Channel.send()</code> through that exact handle is correctly rejected, and the authorized <code>Channel.receive()</code> on the same handle still works normally afterward. See the <a href="reference.html#capabilities">Architecture</a> page and the <a href="examples.html">Walkthrough</a> for the real rejected-send proof.</li>
+<li>Next: broader security hardening (NX/ASLR/sandboxing on the still fully user-accessible shared identity-map region), or extending real per-handle rights to <code>Process</code> handles too.</li>
+</ul>
+
+<h2>What's next after Phase IX</h2>
+<ul>
 <li><strong>Phase X — a real driver framework (PCI enumeration) + networking</strong> (NIC driver, a from-scratch TCP/IP stack) — deliberately last: the largest remaining subsystem, with the fewest things depending on it.</li>
 <li><strong>Phase XI — service architecture + a real <code>init</code></strong> — the current hardcoded shell loop migrates to an actual userspace program once processes/IPC/VFS exist to support that; async I/O as a cross-cutting pass once sync I/O works everywhere.</li>
 </ul>

@@ -47,6 +47,8 @@ POSIX read() 1: 0
 POSIX 0
 POSIX read() 2: 0
 shim works!0
+Channel.open() ok=0x1
+unauthorized Channel.send() succeeded=0x0
 &gt; alloc
 allocated 64 bytes at 0x5000c040
 &gt; alloc
@@ -66,7 +68,7 @@ procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
 &gt; ps
 processes: 0x1 proc0 task=0x7 cr3=0x426000
 &gt; objs
-objects: 0x1 obj0 type=0x1 dataIndex=0x0
+objects: 0x2 obj0 type=0x1 dataIndex=0x0
 &gt; chan
 receiver got: 0x0 value=0x0
 &gt; send
@@ -88,7 +90,7 @@ Hello from MiniFS, this is file #0
 &gt; vfscat /devices/ticks
 ticks: 0x3d8a
 &gt; install
-installed /system/testprog.bin, 0x1eb8 bytes
+installed /system/testprog.bin, 0x20c0 bytes
 &gt; spawn
 spawned process 0x1
 &gt; ps
@@ -129,6 +131,20 @@ sent ring3 spawn trigger</code></pre>
     correct slices of the same underlying buffer — proof the position
     cursor genuinely advances between calls, not just replaying the whole
     buffer each time.
+</p>
+<p>
+    <code>Channel.open() ok=0x1</code> and
+    <code>unauthorized Channel.send() succeeded=0x0</code> are the real
+    capability/rights proof. <code>open()</code> turns a raw channel
+    index into a real handle — but the kernel's own policy only ever
+    grants that handle receive rights, never send rights. The very next
+    line deliberately attempts to send through that exact handle anyway
+    — and <code>succeeded=0x0</code> (false) is the actual point: without
+    real per-handle rights enforcement, checked before the underlying
+    channel is ever touched, this call would have silently succeeded.
+    The receive that follows later in the session, through that same
+    handle, still works normally — the restriction is real but not
+    overzealous.
 </p>
 
 <h2>Heap &amp; frames</h2>
@@ -240,12 +256,17 @@ hello from ring3, via a real File.write() method call!0
 POSIX read() 1: 0
 POSIX 0
 POSIX read() 2: 0
-shim works!0</code></pre>
+shim works!0
+Channel.open() ok=0x1
+unauthorized Channel.send() succeeded=0x0</code></pre>
 <p>
-    The last twelve lines are the <em>spawned child</em> — the exact same
+    The last fourteen lines are the <em>spawned child</em> — the exact same
     program, running its own <code>_start()</code> from scratch in its own
     freshly cloned address space, with its own distinct task index
-    (<code>0x9</code>, not the parent's <code>0x7</code>). It reaches its
+    (<code>0x9</code>, not the parent's <code>0x7</code>) and its own
+    independent handle table — its <code>Channel.open()</code> call gets a
+    brand-new handle, resolved through its own table, never the parent's.
+    It reaches its
     own <code>Channel.receive()</code> too, but the single-slot mailbox is
     already empty again (the parent's own <code>receive()</code> consumed
     the one message <code>ring3go</code> sent) — so it just blocks there

@@ -205,16 +205,48 @@ shell/            the interactive shell
 <tr><td>4</td><td>vfsRead</td><td>path ptr, buffer ptr, max length</td><td>backs the native <code>File.read()</code></td></tr>
 <tr><td>5</td><td>vfsWrite</td><td>path ptr, buffer ptr, length</td><td>backs the native <code>File.write()</code></td></tr>
 <tr><td>6</td><td>spawn</td><td>path ptr, loadVaddr, stackVaddr</td><td>backs the native <code>Process.spawn()</code> — reuses <code>spawnProcessFromPath()</code> unchanged</td></tr>
-<tr><td>7</td><td>channelSend</td><td>channel index, value</td><td>backs the native <code>Channel.send()</code>; bounds-checked</td></tr>
-<tr><td>8</td><td>channelReceive</td><td>channel index</td><td><strong>blocking</strong> — backs <code>Channel.receive()</code>; the first blocking syscall this kernel has</td></tr>
+<tr><td>7</td><td>channelSend</td><td>channel handle, value</td><td>backs the native <code>Channel.send()</code>; resolves the handle in the caller's own table and requires <code>RIGHT_SEND</code></td></tr>
+<tr><td>8</td><td>channelReceive</td><td>channel handle</td><td><strong>blocking</strong> — backs <code>Channel.receive()</code>; the first blocking syscall this kernel has; requires <code>RIGHT_RECEIVE</code></td></tr>
+<tr><td>9</td><td>openChannel</td><td>channel index</td><td>backs <code>Channel.open()</code> — the one place a channel index becomes a real handle; always grants <code>RIGHT_RECEIVE</code> only, never <code>RIGHT_SEND</code></td></tr>
 </table>
 <div class="note">
     A syscall runs with the calling process's own address space still
     loaded (no CR3 switch on <code>int 0x80</code> entry), so
     dereferencing a ring3-supplied pointer needs no special mechanism —
-    but nothing here validates that a pointer/handle argument actually
-    belongs to the calling process. See
-    <a href="#limitations">Known limitations</a>.
+    but nothing here validates that a pointer argument actually belongs
+    to the calling process (handle arguments <em>are</em> now
+    rights-checked, as of milestone 25 — see
+    <a href="#capabilities">Capabilities</a> below). See
+    <a href="#limitations">Known limitations</a> for what's still open.
+</div>
+
+<h2 id="capabilities">Capabilities &amp; rights</h2>
+<p>
+    Every <code>Handle</code> carries a <code>rights</code> bitmask, set
+    once when the handle is granted and never widened afterward:
+</p>
+<pre><code>const int RIGHT_QUERY = 1;
+const int RIGHT_SEND = 2;
+const int RIGHT_RECEIVE = 4;</code></pre>
+<p>
+    <code>openChannel</code> (syscall 9) is the one place a ring3 process
+    can turn a raw channel index into a handle — and the one place the
+    kernel decides policy: it always grants <code>RIGHT_RECEIVE</code>
+    only, regardless of what the caller might want, since nothing in
+    this kernel today needs a ring3-initiated send (the shell always
+    sends directly, in kernel mode). <code>channelSend</code>/
+    <code>channelReceive</code> check the calling handle's rights before
+    ever touching the underlying channel — a handle obtained through
+    <code>openChannel</code> genuinely cannot be used to send, not just
+    "isn't expected to." See the <a href="examples.html">Walkthrough</a>
+    for a real rejected send attempt.
+</p>
+<div class="note">
+    Only <code>Channel</code> is wrapped this way so far. Process handles
+    (still just <code>OBJ_PROCESS</code>) don't yet have a meaningfully
+    differentiated rights set to enforce — extending real per-handle
+    rights to more object types is open, see
+    <a href="roadmap.html">Roadmap</a>.
 </div>
 
 <h2 id="native-api">The native API</h2>
@@ -230,10 +262,11 @@ shell/            the interactive shell
 u64 File.write(File* self, char* buf, u64 len);
 u64 File.read(File* self, char* buf, u64 maxLen);</code></pre>
 <div class="code-label">Channel</div>
-<pre><code>struct Channel { int index; }
+<pre><code>struct Channel { int handle; }
 
-bool Channel.send(Channel* self, u64 value);
-u64  Channel.receive(Channel* self);   // blocks</code></pre>
+bool Channel.open(Channel* self, int channelIndex);   // grants RIGHT_RECEIVE only
+bool Channel.send(Channel* self, u64 value);           // fails without RIGHT_SEND
+u64  Channel.receive(Channel* self);   // blocks; fails without RIGHT_RECEIVE</code></pre>
 <div class="code-label">Process</div>
 <pre><code>struct Process { char* path; }
 
@@ -313,7 +346,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <h2 id="limitations">Known limitations (on purpose, for now)</h2>
 <ul>
 <li><strong>The shared identity-map/heap region is still fully user-accessible</strong> in every address space — real isolation only covers each process's <em>private</em> region (<code>vaddr &gt;= 0x80000000</code>). A real memory-protection pass over the shared region is planned once capability/security work is underway.</li>
-<li><strong>Syscall arguments (pointers, handles, channel indices) are checked for validity/bounds but not ownership</strong> — a ring3 process that knows or guesses a valid handle/channel index for a resource it wasn't actually given can still touch it. Real per-resource access control is a later milestone.</li>
+<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>Channel</code> handles are real, rights-checked capabilities as of milestone 25 (see <a href="#capabilities">Capabilities &amp; rights</a>), but that's the only object type covered so far — <code>Process</code> handles don't have a meaningfully differentiated rights set to enforce yet.</li>
 <li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
 <li><strong>Channels aren't wrapped as kernel objects/handles</strong> — they're a plain integer index, unlike processes.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
