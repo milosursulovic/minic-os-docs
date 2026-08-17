@@ -92,7 +92,10 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         just "two different numbers came back." A cloned address space's
         copy of the shared kernel region is stripped of ring3 access too —
         a deliberate forbidden write from ring3 takes a real page fault,
-        not a silent success.</p>
+        not a silent success. Real NX (no-execute) enforcement, too — a
+        ring3 process that writes an instruction onto its own stack and
+        jumps to it takes a page fault with the CPU's own
+        instruction-fetch bit set, not a silent execution.</p>
     </div>
     <div class="card">
         <h3>An NT-style object/handle model</h3>

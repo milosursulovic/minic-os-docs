@@ -323,23 +323,57 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
 sent ring3 forbidden-write trigger - expect a page fault
 Channel.receive() got trigger 0x2
 attempting forbidden ring3 write to 0x100000
-page fault at 0x100000, halting</code></pre>
+page fault at 0x100000, errorCode=0x7, halting</code></pre>
 <p>
     This is milestone 26's actual proof. <code>attempting forbidden ring3
     write to 0x100000</code> confirms the process really reached the write
     attempt; the very next line the source would have printed on success —
     <code>"forbidden write succeeded (BUG!) at 0x..."</code> — never
     appears, because the CPU faulted on the write itself before that
-    syscall could even be staged. <code>page fault at 0x100000, halting</code>
-    is the kernel's existing page-fault handler independently confirming
-    the exact faulting address (read from CR2, not anything the ring3
-    process reported about itself) — <code>0x100000</code>, the kernel's
-    own multiboot load address, inside the shared region every address
-    space carries but never something this process mapped for itself.
-    Before this milestone's fix, the same command printed the "(BUG!)"
-    line and kept running, the write landing silently in live kernel
-    memory — the absence of that line, replaced by a fault at exactly the
-    address written to, is what makes this a real negative-space proof.
+    syscall could even be staged. <code>page fault at 0x100000,
+    errorCode=0x7, halting</code> is the kernel's existing page-fault
+    handler independently confirming the exact faulting address (read
+    from CR2, not anything the ring3 process reported about itself) —
+    <code>0x100000</code>, the kernel's own multiboot load address, inside
+    the shared region every address space carries but never something
+    this process mapped for itself. Before this milestone's fix, the same
+    command printed the "(BUG!)" line and kept running, the write landing
+    silently in live kernel memory — the absence of that line, replaced
+    by a fault at exactly the address written to, is what makes this a
+    real negative-space proof. <code>errorCode=0x7</code> (present + write
+    + user — milestone 28's addition to this handler) confirms it
+    specifically as a write violation, worth comparing directly against
+    the NX proof below.
+</p>
+
+<h2>A deliberate stack-execution attempt</h2>
+<p>
+    <code>ring3nx</code> is milestone 28's proof — same one-shot,
+    kernel-halting shape as <code>ring3fault</code>, a third trigger value
+    on the same channel. Instead of writing to forbidden kernel memory,
+    the boot-time process writes a real <code>ret</code> opcode
+    (<code>0xC3</code>) onto its <em>own</em> user stack and attempts to
+    execute it:
+</p>
+<pre><code>&gt; ring3nx
+sent ring3 stack-execution trigger - expect a page fault
+Channel.receive() got trigger 0x3
+attempting to execute ring3 stack byte at 0x80020000
+page fault at 0x80020000, errorCode=0x15, halting</code></pre>
+<p>
+    If <code>PAGE_NX</code> (<code>mm/paging.mc</code>) weren't actually
+    enforced on the stack mapping, this would be completely harmless — a
+    bare <code>ret</code> just pops the return address the preceding
+    <code>call</code> pushed and jumps straight back — so the
+    <code>"stack execution succeeded (BUG!)"</code> line right after it in
+    the source would print. It never does. <code>errorCode=0x15</code>
+    (binary <code>10101</code>: present + user + <strong>bit 4,
+    instruction fetch</strong>) is the actual proof — the CPU's own
+    hardware signal that this specific access was an execute attempt, not
+    a coincidental fault. Directly comparable against
+    <code>ring3fault</code>'s own <code>errorCode=0x7</code> (bit 4 clear)
+    captured moments above: two different deliberate violations, two
+    different, independently-checkable error-code signatures.
 </p>
 
 </main>

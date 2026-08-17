@@ -264,7 +264,7 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     <a href="examples.html">Walkthrough</a> for the real captured proof.
 </p>
 
-<h2 id="memory-protection">Memory protection on the shared region</h2>
+<h2 id="memory-protection">Memory protection: the shared region, and NX</h2>
 <p>
     Milestone 26 closed a real gap: <code>cloneAddressSpace()</code>
     (<code>mm/paging.mc</code>) used to copy the kernel's own
@@ -299,6 +299,39 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     present, and never mapped by that process itself). The existing
     page-fault handler reports the exact faulting address and halts,
     before the process's own "it worked" print can ever run. See the
+    <a href="examples.html">Walkthrough</a> for the real captured output.
+</p>
+<p>
+    <strong>Milestone 28</strong> added real NX (no-execute) enforcement
+    — the classic W^X hardening that stops injected "shellcode" from
+    being jumped to and run. <code>boot.s</code> sets
+    <code>EFER.NXE</code> (bit 11) at boot, in the same <code>rdmsr</code>/
+    <code>wrmsr</code> round trip as the existing <code>EFER.LME</code> —
+    order matters, since setting a page table entry's NX bit (PTE bit 63)
+    before NXE is live is a <em>reserved-bit</em> violation on every
+    access to that page, not an execute-only restriction. Unlike the
+    "user" bit above (which the CPU ANDs across every translation level,
+    so an intermediate PDPT entry had to be fixed), the CPU <strong>ORs</strong>
+    the NX bit across every level — only the final leaf PT entry ever
+    needs it set, no intermediate-table change required. Applied to every
+    dynamically-mapped region that's genuinely pure data: the heap, the
+    <code>map</code> demo, the scheduler's private demo mapping, and —
+    the real point — every ring3 process's own user stack. Deliberately
+    <strong>not</strong> applied to a loaded ring3 program's own code+data
+    image: the loader still flattens a whole compiled program into one
+    contiguous blob with no tracked code/data boundary (see
+    <a href="#compiled-ring3">Compiled MiniC in ring 3</a>), so a real
+    W^X split within a loaded image remains open — see
+    <a href="#limitations">Known limitations</a>.
+</p>
+<p>
+    Verified with a real negative-space proof again: the shell's
+    <code>ring3nx</code> command has the boot-time process write a real
+    <code>ret</code> opcode (<code>0xC3</code>) onto its own stack and
+    attempt to <code>call</code> it. The page fault's error code —
+    <code>0x15</code> — has the CPU's own instruction-fetch bit (bit 4)
+    set, independently distinguishing this from <code>ring3fault</code>'s
+    own write-violation error code (<code>0x7</code>). See the
     <a href="examples.html">Walkthrough</a> for the real captured output.
 </p>
 
@@ -408,6 +441,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>Channel</code> (milestone 25) and <code>Process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>Process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
 <li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
+<li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe/PCI enumeration.</li>
