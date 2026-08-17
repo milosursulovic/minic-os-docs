@@ -77,6 +77,8 @@ sent 0xc0ffee1234
 receiver got: 0x1 value=0xc0ffee1234
 &gt; pci
 pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 vendor=0x8086 device=0x7000 class=0x6 subclass=0x1 0:1.1 vendor=0x8086 device=0x7010 class=0x1 subclass=0x1 0:1.3 vendor=0x8086 device=0x7113 class=0x6 subclass=0x80 0:2.0 vendor=0x1234 device=0x1111 class=0x3 subclass=0x0 0:3.0 vendor=0x8086 device=0x100e class=0x2 subclass=0x0
+&gt; nic
+e1000 mac=52:54:0:12:34:56 linkUp=0x1
 &gt; disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 &gt; diskwrite
@@ -223,6 +225,26 @@ sent ring3 spawn trigger</code></pre>
     public PCI ID databases — the same "a wrong answer is obviously
     wrong" property every milestone's verification here has looked for
     since milestone 1.
+</p>
+
+<h2>A real e1000 NIC driver</h2>
+<p>
+    <code>nic</code> is milestone 30's proof, and its strength is the
+    same shape as <code>pci</code>'s: checkable against a value this
+    kernel had no part in producing. <code>52:54:00:12:34:56</code> is
+    QEMU's own well-known, publicly documented default NIC MAC address —
+    reading it back correctly means <code>net/e1000.mc</code> genuinely
+    enabled the device over PCI, correctly found and mapped its real
+    physical MMIO register file (not RAM — the first device-register
+    mapping this kernel has ever done), and pulled real hardware state
+    out of it (<code>RAL0</code>/<code>RAH0</code>, pre-loaded by QEMU's
+    own emulated EEPROM). A broken mapping, a wrong BAR, or garbage
+    register reads would have produced a zeroed or nonsense MAC instead
+    — immediately, independently wrong, not just "the command didn't
+    crash." <code>linkUp=0x1</code> is a second, separate piece of real
+    hardware state confirming the same thing. No packet has been sent or
+    received yet — this milestone proves the driver can talk to the
+    hardware, deliberately not more than that.
 </p>
 
 <h2>Disk &amp; filesystem</h2>

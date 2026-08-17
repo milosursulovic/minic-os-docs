@@ -80,7 +80,12 @@ drivers/          hardware setup and I/O
   interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.mc        scancode table + the shell's line buffer
   pci.mc             milestone 29 (Phase X's first step): PCI bus
-                     enumeration via CONFIG_ADDRESS/CONFIG_DATA, bus 0 only
+                     enumeration via CONFIG_ADDRESS/CONFIG_DATA, bus 0 only.
+                     Milestone 30: pciConfigWriteDword() (first PCI config
+                     WRITE) and pciReadBar0()
+net/              networking (milestone 30 onward)
+  e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
+                     mapping, real MAC/link-status readback. No TX/RX yet
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand
   frames.mc          multiboot memory map parser + physical frame allocator
@@ -459,6 +464,58 @@ int close(int fd);</code></pre>
     captured output.
 </p>
 
+<h2 id="e1000">The e1000 NIC driver</h2>
+<p>
+    Milestone 30 is a real driver for the e1000 milestone 29 already
+    found — deliberately scoped to <strong>initialization only</strong>:
+    enable the device, map its registers, read back real hardware state.
+    Setting up the RX/TX descriptor rings and moving an actual packet is
+    a separably-sized hard problem, left for a later milestone — the
+    same "narrowest safe first version" discipline bus-0-only PCI
+    enumeration used.
+</p>
+<p>
+    Unlike every earlier driver in this kernel, the e1000's real
+    register file isn't reached through port I/O — it's
+    <strong>memory-mapped</strong> (MMIO). <code>net/e1000.mc</code>
+    enables the device over PCI (<code>drivers/pci.mc</code>'s new
+    <code>pciConfigWriteDword()</code> — this kernel's first PCI config
+    space <em>write</em>, every earlier use was read-only — sets Memory
+    Space + Bus Master in the command register), reads BAR0
+    (<code>pciReadBar0()</code>) to find the device's real physical MMIO
+    base, and maps 8 pages of it into the kernel's own address space via
+    <code>mm/paging.mc</code>'s ordinary <code>mapPage()</code> — the
+    first time this kernel has mapped device registers rather than RAM,
+    though the mapping mechanism itself doesn't distinguish the two.
+</p>
+<p>
+    A real assumption worth stating plainly, since it's the kind of
+    thing that would fail badly and confusingly if wrong: BAR0 has to
+    already hold a valid, assigned physical address for this to work at
+    all. It does, because QEMU's <code>-kernel</code> boot still runs
+    SeaBIOS first — multiboot loading is one of SeaBIOS's own jobs, not
+    a BIOS bypass — so real PCI bus enumeration and BAR assignment
+    already happened before this kernel ever got control. Confirmed
+    empirically rather than assumed: a genuinely unassigned BAR would
+    have meant mapping physical address 0 or garbage, and the driver
+    would have read back nonsense instead of a real MAC address.
+</p>
+<p>
+    The MAC address comes straight from <code>RAL0</code>/<code>RAH0</code>
+    — pre-loaded by QEMU's own emulated EEPROM at power-on, the same way
+    real hardware auto-loads its burned-in address — rather than
+    implementing the separate EEPROM-read protocol (register
+    <code>EERD</code>) just to re-derive a value already sitting in
+    plain registers. Verified the same way milestone 29's own proof was:
+    checkable against something this kernel had no part in choosing. The
+    real MAC read back, <code>52:54:00:12:34:56</code>, is QEMU's own
+    well-known, publicly documented default NIC MAC — not a number this
+    driver could fake its way into producing by accident — and the
+    link-up bit reads a second, separate piece of real hardware state.
+    See the <a href="examples.html">Walkthrough</a> for the real
+    captured output.
+</p>
+
 <h2 id="testing">Testing methodology</h2>
 <p>
     Every claim in this project is backed by a concrete, checkable
@@ -490,8 +547,9 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
-<li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe/PCI enumeration.</li>
-<li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework, and — the real remaining size of this phase — no NIC driver and no networking stack at all. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
+<li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
+<li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
+<li><s>No NIC driver</s> — <strong>a real e1000 driver exists as of milestone 30</strong> (see <a href="#e1000">The e1000 NIC driver</a>): PCI-enabled, MMIO-mapped, real MAC/link-status readback. <strong>Still fully open</strong>: no RX/TX descriptor rings, so no packet has ever actually been sent or received — <code>nic</code> proves the driver can talk to the hardware, not that it can move network traffic. No ARP, no IP, no UDP/TCP — the entire protocol stack above the device driver remains ahead, each realistically its own future milestone.</li>
 </ul>
 
 </main>

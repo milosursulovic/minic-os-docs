@@ -138,14 +138,16 @@
 <tr><td><code>ring3nx</code></td><td>sends a <em>third</em> trigger value — the boot-time ring3 process writes a real instruction byte onto its own user stack and attempts to execute it, proving NX enforcement (see <a href="reference.html#memory-protection">Memory protection</a>). <strong>Halts the kernel</strong> — same one-shot caveat as <code>ring3fault</code></td></tr>
 </table>
 
-<h2>Hardware discovery (PCI)</h2>
+<h2>Hardware discovery (PCI) &amp; networking</h2>
 <p>
-    Milestone 29's own subsystem — the first time this kernel discovers
-    its own hardware instead of trusting a fixed, hardcoded I/O port.
+    Phase X's own subsystems — the first time this kernel discovers its
+    own hardware instead of trusting a fixed, hardcoded I/O port, and
+    (as of milestone 30) a real driver for the NIC that discovery finds.
 </p>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
 <tr><td><code>pci</code></td><td>walks the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism across bus 0's 32 device slots and prints every real device found — vendor/device ID, class/subclass — independently checkable against QEMU's own default machine model (see <a href="reference.html#pci">Hardware discovery: PCI</a>)</td></tr>
+<tr><td><code>nic</code></td><td>enables the e1000 NIC over PCI, maps its MMIO register file, and prints its real MAC address and link-up status — read straight from hardware, not fabricated. No packet TX/RX yet (see <a href="reference.html#e1000">The e1000 NIC driver</a>)</td></tr>
 </table>
 
 <h2>Raw disk I/O</h2>
