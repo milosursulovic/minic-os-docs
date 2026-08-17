@@ -128,9 +128,9 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         — every device found checks out against QEMU's own default
         machine model, vendor:device ID and all. A real e1000 driver
         enables the NIC it finds over PCI, maps its memory-mapped
-        register file for the first time this kernel has ever addressed
-        device registers instead of RAM, and reads back a real MAC
-        address and link status — packet TX/RX is next.</p>
+        register file, and moves real packets through real TX/RX
+        descriptor rings — verified with a genuine external round trip
+        through QEMU's own network backend, not a loopback.</p>
     </div>
     <div class="card">
         <h3>Compiled MiniC running in ring 3</h3>

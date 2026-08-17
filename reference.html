@@ -85,7 +85,9 @@ drivers/          hardware setup and I/O
                      WRITE) and pciReadBar0()
 net/              networking (milestone 30 onward)
   e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
-                     mapping, real MAC/link-status readback. No TX/RX yet
+                     mapping, real MAC/link-status readback. Milestone
+                     31: real TX/RX descriptor rings, a genuine packet
+                     round trip verified via a hand-crafted ARP request
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand
   frames.mc          multiboot memory map parser + physical frame allocator
@@ -515,6 +517,55 @@ int close(int fd);</code></pre>
     See the <a href="examples.html">Walkthrough</a> for the real
     captured output.
 </p>
+<p>
+    <strong>Milestone 31</strong> builds on that groundwork with real
+    TX/RX descriptor rings and a genuine packet round trip — the
+    DMA-buffer-management work milestone 30 deliberately deferred. A NIC
+    doesn't move bytes through registers one at a time the way port I/O
+    devices do: the driver hands the hardware a ring of
+    <strong>descriptors</strong> (each a pointer to a real data buffer,
+    plus length/status/command fields) living in ordinary RAM, and the
+    device DMAs to/from those buffers itself once bus-mastering is
+    enabled (already turned on in milestone 30). <code>packed struct
+    TxDescriptor</code>/<code>RxDescriptor</code> match the hardware's
+    own 16-byte layout exactly. <code>e1000Send()</code> copies data into
+    a buffer, hands a descriptor to the hardware, and polls the
+    descriptor's own DD (descriptor done) status bit — the hardware's own
+    confirmation it genuinely completed the transmission, the same
+    bounded-poll, fail-clean discipline <code>disk/ata.mc</code>'s
+    <code>ataWaitReady</code>/<code>ataWaitDrq</code> already established.
+    <code>e1000Receive()</code> is the RX-side equivalent.
+</p>
+<p>
+    Deliberately <strong>not</strong> a real ARP subsystem — no address
+    resolution cache, no general request/reply handling. The shell's new
+    <code>arp</code> command crafts exactly one hardcoded, valid
+    Ethernet+ARP request frame asking "who has 10.0.2.2" (QEMU's SLIRP
+    networking's own well-known default gateway), purely as a real
+    external stimulus to prove RX genuinely works — the same "one
+    hardcoded test case, not a general framework" scope milestone 26's
+    <code>ring3fault</code> already used.
+</p>
+<p>
+    A real fix found during testing, not assumed correct from the start:
+    the first attempt's RX poll used a raw instruction-count spin bound,
+    and got back nothing. Not a driver bug — a measurement one. A tight
+    spin loop doesn't reliably correspond to any particular amount of
+    real wall-clock time, and a genuine external SLIRP round trip needs
+    real time to happen. Fixed by polling against <code>isr/isr.mc</code>'s
+    own <code>gTickCount</code> instead of a raw iteration count — the
+    same underlying lesson this project's QEMU/TCG timer-rate gotcha
+    already taught, applied to a new context.
+</p>
+<p>
+    Verified with the strongest proof this driver has produced yet: TX
+    confirmed by the hardware's own descriptor-done bit, and RX confirmed
+    by a genuine reply from QEMU's real, external network stack.
+    <code>from=52:55:0a:00:02:02</code>/<code>senderIp=10.0.2.2</code> are
+    QEMU's own documented default gateway MAC/IP — not anything this
+    kernel could have fabricated. See the
+    <a href="examples.html">Walkthrough</a> for the real captured output.
+</p>
 
 <h2 id="testing">Testing methodology</h2>
 <p>
@@ -549,7 +600,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
 <li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
-<li><s>No NIC driver</s> — <strong>a real e1000 driver exists as of milestone 30</strong> (see <a href="#e1000">The e1000 NIC driver</a>): PCI-enabled, MMIO-mapped, real MAC/link-status readback. <strong>Still fully open</strong>: no RX/TX descriptor rings, so no packet has ever actually been sent or received — <code>nic</code> proves the driver can talk to the hardware, not that it can move network traffic. No ARP, no IP, no UDP/TCP — the entire protocol stack above the device driver remains ahead, each realistically its own future milestone.</li>
+<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <strong>Still fully open</strong>: no real ARP subsystem (<code>arp</code> crafts one hardcoded request/reply pair as a driver-level test, not a general address-resolution mechanism), no IP, no UDP/TCP — the entire protocol stack above the device driver remains ahead, each realistically its own future milestone. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.mc</code> already established.</li>
 </ul>
 
 </main>
