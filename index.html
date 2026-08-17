@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniC OS — a kernel written in MiniC, from scratch</title>
+<meta name="description" content="MiniC OS is a multiboot1 x86-64 kernel written almost entirely in MiniC, a hand-written systems language with no LLVM. Ring 3 processes, a native object/handle model, IPC, a real filesystem, and a POSIX-shaped API.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+    <a class="brand" href="index.html">MiniC OS<span class="dot">.</span></a>
+    <a class="navlink active" href="index.html">Home</a>
+    <a class="navlink" href="install.html">Getting Started</a>
+    <a class="navlink" href="guide.html">Shell Guide</a>
+    <a class="navlink" href="reference.html">Architecture</a>
+    <a class="navlink" href="examples.html">Walkthrough</a>
+    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="download.html">Download</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
+</nav>
+
+<main>
+
+<div class="kicker">A kernel, written in MiniC</div>
+<h1>MiniC OS</h1>
+<p class="lede">
+    A multiboot1 x86-64 kernel written almost entirely in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a> — a small,
+    hand-written systems language with its own compiler, no LLVM. The only
+    hand-written assembly is what's genuinely below what a MiniC function
+    body can express: the 32-to-64-bit boot transition, interrupt entry
+    stubs, and context switching.
+</p>
+
+<div class="code-label">a real shell session</div>
+<pre><code>&gt; alloc
+allocated 64 bytes at 0x5000c040
+&gt; map
+mapped 0x40000000 -&gt; 0x422000, wrote/read 0xcafebabe
+&gt; mkfs
+filesystem formatted
+&gt; mkfile
+created file0.mfs
+&gt; spawn
+spawned process 0x1
+&gt; ps
+processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
+</code></pre>
+
+<p>
+    Every one of those commands is backed by a real subsystem, not a stub:
+    a free-list heap over a physical frame allocator, real dynamic
+    PML4/PDPT/PD/PT paging, a preemptive scheduler, a custom on-disk
+    filesystem, and a real process loader — all written in ordinary MiniC,
+    all verified in QEMU with a concrete, checkable assertion for every
+    claim (an exact byte count, a register readback, a physical address
+    that genuinely differs between two isolated processes), never just
+    "it didn't crash."
+</p>
+
+<h2>Where this fits</h2>
+<p>
+    MiniC OS is the kernel-phase destination of the
+    <a href="https://github.com/milosursulovic/minic">MiniC compiler</a>
+    project — the point where the language stops being exercised by small
+    demo programs and starts being exercised by a real kernel with real
+    constraints (no libc, no register allocator, no forward declarations).
+    Every real language gap MiniC OS surfaced (char literals, <code>char</code>
+    arithmetic, <code>break</code>/<code>continue</code>, 2D arrays,
+    <code>const</code>, and eventually real <code>obj.method()</code> syntax)
+    got fixed as a real compiler feature, not worked around and forgotten.
+</p>
+
+<h2>What's already real</h2>
+
+<div class="grid">
+    <div class="card">
+        <h3>Ring 0 → ring 3, for real</h3>
+        <p>A GDT ring3 code/data pair, a TSS with a per-task <code>RSP0</code>,
+        and an <code>int 0x80</code> syscall gate — verified by reading back
+        <code>cs=0x1B</code> from inside ring3, not just "a syscall
+        succeeded."</p>
+    </div>
+    <div class="card">
+        <h3>Real process isolation</h3>
+        <p>Each process gets its own PML4, cloned on spawn — two processes
+        mapping the identical virtual address resolve to two genuinely
+        different physical frames, confirmed with a page-table walk, not
+        just "two different numbers came back."</p>
+    </div>
+    <div class="card">
+        <h3>An NT-style object/handle model</h3>
+        <p>Ring 3 code only ever sees a small integer handle, bounds- and
+        existence-checked on every use — never a raw kernel pointer.</p>
+    </div>
+    <div class="card">
+        <h3>Real IPC</h3>
+        <p>Blocking channel receive reuses the exact same scheduler
+        blocking primitive <code>sleep()</code> already proved, generalized
+        to a second wake condition — no second mechanism invented.</p>
+    </div>
+    <div class="card">
+        <h3>A real filesystem, from scratch</h3>
+        <p>A legacy ATA PIO driver, a custom filesystem ("MiniFS") with a
+        real superblock/directory/data layout, and a VFS routing
+        <code>/system</code> and <code>/devices</code> paths to different
+        backends through the identical function call.</p>
+    </div>
+    <div class="card">
+        <h3>Compiled MiniC running in ring 3</h3>
+        <p>Ring 3 processes are real, <code>minicc</code>-compiled MiniC
+        programs — not hand-assembled blobs — using real
+        <code>obj.method()</code> syntax against a native <code>File</code>/
+        <code>Channel</code>/<code>Process</code> API, plus a thin
+        POSIX-shaped <code>open</code>/<code>read</code>/<code>write</code>/
+        <code>close</code> shim layered on top.</p>
+    </div>
+</div>
+
+<h2>Try it</h2>
+<pre><code>qemu-system-x86_64 -kernel minic-kernel.elf</code></pre>
+<p>
+    See <a href="install.html">Getting Started</a> for building from
+    source, running under QEMU, or booting the ISO in VirtualBox/VMware/
+    real hardware. No toolchain handy? <a href="download.html">Pre-built
+    downloads</a> exist too.
+</p>
+
+</main>
+
+<footer>
+    MiniC OS is a hobby kernel project, written in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+</footer>
+
+</body>
+</html>

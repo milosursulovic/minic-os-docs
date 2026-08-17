@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — MiniC OS</title>
+<meta name="description" content="How MiniC OS is built: boot process, memory map, scheduler, the ring0/ring3 syscall ABI, the native File/Channel/Process API, the POSIX shim, and known limitations.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+    <a class="brand" href="index.html">MiniC OS<span class="dot">.</span></a>
+    <a class="navlink" href="index.html">Home</a>
+    <a class="navlink" href="install.html">Getting Started</a>
+    <a class="navlink" href="guide.html">Shell Guide</a>
+    <a class="navlink active" href="reference.html">Architecture</a>
+    <a class="navlink" href="examples.html">Walkthrough</a>
+    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="download.html">Download</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
+</nav>
+
+<main class="wide">
+
+<div class="kicker">Architecture</div>
+<h1>How MiniC OS is built</h1>
+<p class="lede">
+    Almost everything past the boot transition is ordinary MiniC. The only
+    hand-written x86 assembly is what's genuinely below what a MiniC
+    function body (<code>asm("...")</code>, no operand binding, can't
+    reach a local variable) can express: program <em>structure</em>, not
+    logic.
+</p>
+
+<h2 id="boot">Boot process</h2>
+<p>
+    Multiboot1 drops the kernel in 32-bit protected mode; MiniC only
+    targets x86-64. Getting from one to the other — loading a GDT,
+    building page tables, enabling long mode, far-jumping into a 64-bit
+    code segment — is hand-written in <code>boot/boot.s</code>, the same
+    way every kernel project does it, even ones written in Rust or Zig.
+    <code>boot/linker.ld</code> places the multiboot header and code at
+    the conventional 1MB load address multiboot expects.
+</p>
+<p>
+    <code>boot.s</code> also owns the GDT/TSS setup: a ring3 code/data
+    segment pair alongside the ring0 ones, and a TSS whose <code>RSP0</code>
+    field tells the CPU which stack to switch to on any ring3→ring0
+    transition. <code>RSP0</code> is an <strong>absolute reset point, not
+    a continuation</strong> — the CPU loads it fresh on every transition,
+    so pointing it at a stack something else is still using silently
+    corrupts that other thing's state. <code>boot.s</code> sets it once,
+    to its own dedicated stack, as a safe initial value; from the process
+    model onward (see <a href="#process-model">below</a>), the scheduler
+    repoints it per-task on every context switch instead.
+</p>
+<p>
+    Once in 64-bit mode, <code>boot.s</code> calls MiniC's own entry point,
+    <code>_start()</code> in <code>kmain.mc</code> — everything past that
+    point is ordinary MiniC, using nothing the language's freestanding/
+    systems phase didn't already build (<code>volatile</code>,
+    <code>packed struct</code>, pointer arithmetic, and <code>asm(...)</code>
+    for the handful of raw instructions MiniC has no other way to express:
+    <code>out</code>/<code>in</code>/<code>lidt</code>/<code>sti</code>/
+    <code>invlpg</code>, reading <code>cr2</code>/<code>cr3</code>).
+</p>
+
+<h2 id="layout">Project layout</h2>
+<pre><code>kmain.mc          entry point (_start) + the imports wiring everything together
+boot/             hand-written assembly - below what asm(...) can express
+  boot.s            multiboot header, 32-to-64-bit transition, GDT/TSS
+  interrupts.s       ISR/IRQ entry stubs (save/restore, call into MiniC)
+  linker.ld          places the multiboot header + code at the 1MB load address
+drivers/          hardware setup and I/O
+  io.mc              VGA text buffer, serial port, raw in/out port I/O
+  interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
+  keyboard.mc        scancode table + the shell's line buffer
+mm/               memory management
+  heap.mc            kalloc/kfree free-list allocator, grows on demand
+  frames.mc          multiboot memory map parser + physical frame allocator
+  paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
+                     spaces, per-task TSS.RSP0
+lib/              no-libc helpers (streq/strlen/parseHex/printHex/...)
+isr/              interrupt dispatch (interrupt_handler)
+sched/            preemptive task scheduler
+  switch.s           hand-written context switch - below what asm(...) can express
+  task.mc            Task table, createTask/yield/sleep/channelReceive
+syscall/          ring0/ring3 boundary
+  usermode.s         hand-written ring3 entry - below what asm(...) can express
+  syscall.mc         the syscall dispatcher (see the ABI table below)
+proc/             process loading + the kernel object model + IPC
+  ring3prog.mc       the loaded ring3 program - real, minicc-compiled MiniC
+  ring3.ld           standalone linker script for ring3prog.mc's own link
+  ring3blob.s        wraps the flattened blob in the loader's marker symbols
+  process.mc         Process table + the real loader
+  object.mc          KernelObject table + per-process handle tables
+  channel.mc         Channel table (single-slot mailboxes)
+disk/             storage
+  ata.mc             legacy ATA PIO driver - real sector read/write
+  minifs.mc          MiniFS: a minimal custom filesystem
+  vfs.mc             VFS: path -&gt; mount -&gt; backend routing
+  devfs.mc           the "/devices" backend - live kernel state, no disk
+shell/            the interactive shell
+  shell.mc           cmd* functions + the command dispatcher
+</code></pre>
+
+<h2 id="memory-map">Memory map</h2>
+<table>
+<tr><th>Region</th><th>What's there</th></tr>
+<tr><td><code>0</code> – 1GB</td><td>the boot-time static identity map (<code>boot.s</code>'s own page tables) — kernel code, stack, heap, and every demo command's memory all live here, shared and mapped identically in <em>every</em> address space (PDPT[0]/PDPT[1])</td></tr>
+<tr><td><code>0x80000000</code>+ (PDPT[2] and up)</td><td>each process's <strong>private</strong> region — not present by default in a freshly cloned address space, populated on demand only by whichever task owns that PML4. This is where a loaded ring3 process's own code/data (<code>0x80000000</code>) and user stack (<code>0x80020000</code>) live.</td></tr>
+</table>
+<div class="note">
+    The shared region (identity map + heap) is still marked
+    user-accessible in every address space today — a genuinely open
+    security gap, not an oversight; see
+    <a href="#limitations">Known limitations</a>.
+</div>
+
+<h2 id="scheduler">Scheduler</h2>
+<p>
+    A fixed table of tasks, each with its own <code>kalloc</code>'d stack.
+    <code>createTask()</code> hand-builds a new task's initial stack to
+    look exactly like what the hand-written <code>switch_context()</code>
+    would have left behind, with the task's entry point as a fake "return
+    address" — the first switch into a never-run task lands there via an
+    ordinary <code>ret</code>, no special-casing needed for "first run" vs
+    "resuming."
+</p>
+<p>
+    <code>yield()</code> round-robins to the next non-blocked task —
+    called voluntarily by cooperative tasks, and <em>also</em> called from
+    inside the timer interrupt handler, which is what makes scheduling
+    preemptive: since the interrupt handler is just an ordinary nested
+    MiniC call on whichever task's stack the CPU happened to interrupt,
+    calling <code>yield()</code> from inside it suspends that call exactly
+    like a voluntary <code>yield()</code> would.
+</p>
+<p>
+    <code>sleep(ticks)</code> adds real blocking: a task marks itself
+    blocked with a wake tick and yields away; the scan skips blocked tasks,
+    waking one up the moment its condition is met. Channel receive (see
+    <a href="#ipc">IPC</a> below) reuses this exact mechanism with a second
+    kind of wake condition, not a separate blocking primitive.
+</p>
+
+<h2 id="process-model">Process model &amp; isolation</h2>
+<p>
+    Real per-process address-space isolation: <code>cloneAddressSpace()</code>
+    builds a fresh PML4 whose entry 0 points at a fresh PDPT that shares
+    PDPT[0]/PDPT[1] (identity map + heap) with the kernel's own PDPT —
+    literally the same physical sub-tables, so kernel code/stack/heap stay
+    reachable unchanged — while everything from PDPT[2] up starts out
+    not-present, private to whichever task gets that PML4.
+</p>
+<p>
+    <code>spawnProcess(imageStart, imageEnd, loadVaddr, stackVaddr)</code>
+    is the real loader: clones a fresh address space, maps and copies a
+    byte range into it page by page, maps a user stack, then creates a
+    scheduler task whose kernel-mode entry does exactly one thing — enter
+    ring3 at the loaded address via a hand-written fake-<code>iretq</code>-frame
+    trick. From then on the task only ever runs in ring3, preemptible by
+    the timer like any other task. <code>spawnProcessFromPath(path, ...)</code>
+    is the same loader fed from a real file read through the VFS instead
+    of a pointer range.
+</p>
+<p>
+    A kernel-wide <code>KernelObject</code> table plus a <em>separate</em>
+    per-process handle table give ring3 code a small integer instead of a
+    raw kernel pointer — <code>resolveHandle(processIndex, handle)</code>
+    is the one place that integer becomes a real object index, bounds-
+    checked and existence-checked, never trusted directly. Every process
+    gets a handle to itself for free, guaranteed to land in the
+    well-known slot 0 (a fresh handle table starts empty, so the first
+    allocation into it always takes slot 0).
+</p>
+
+<h2 id="ipc">IPC (channels)</h2>
+<p>
+    A <code>Channel</code> is a single-slot mailbox (one <code>u64</code>
+    message). <code>channelSend()</code> is non-blocking — fails outright
+    if the mailbox is already full, rather than overwriting an unread
+    message or blocking the sender too (a real, separate hard problem, not
+    tackled yet). <code>channelReceive()</code> is the one genuinely new
+    scheduler mechanism: it blocks the calling task exactly the way
+    <code>sleep()</code> already does, just with a channel index set
+    instead of a wake tick — the blocked-task scan gained a second wake
+    condition (a message arriving) alongside the tick check.
+</p>
+
+<h2 id="syscalls">The ring0/ring3 boundary &amp; syscall ABI</h2>
+<p>
+    The calling convention is this kernel's own, since it goes through a
+    software <code>int 0x80</code> gate rather than the fixed
+    <code>SYSCALL</code>/<code>SYSRET</code> convention: <code>rax</code> =
+    syscall number in / return value out, <code>rdi</code>/<code>rsi</code>/
+    <code>rdx</code> = up to three arguments.
+</p>
+<table>
+<tr><th>#</th><th>Name</th><th>Arguments</th><th>Notes</th></tr>
+<tr><td>1</td><td>print</td><td>message ptr, hex value</td><td>prints the string then the value in hex</td></tr>
+<tr><td>3</td><td>query handle</td><td>handle</td><td>resolves a handle in the caller's own table, returns ground-truth data (e.g. a process's task index) or a <code>-1</code> sentinel</td></tr>
+<tr><td>4</td><td>vfsRead</td><td>path ptr, buffer ptr, max length</td><td>backs the native <code>File.read()</code></td></tr>
+<tr><td>5</td><td>vfsWrite</td><td>path ptr, buffer ptr, length</td><td>backs the native <code>File.write()</code></td></tr>
+<tr><td>6</td><td>spawn</td><td>path ptr, loadVaddr, stackVaddr</td><td>backs the native <code>Process.spawn()</code> — reuses <code>spawnProcessFromPath()</code> unchanged</td></tr>
+<tr><td>7</td><td>channelSend</td><td>channel index, value</td><td>backs the native <code>Channel.send()</code>; bounds-checked</td></tr>
+<tr><td>8</td><td>channelReceive</td><td>channel index</td><td><strong>blocking</strong> — backs <code>Channel.receive()</code>; the first blocking syscall this kernel has</td></tr>
+</table>
+<div class="note">
+    A syscall runs with the calling process's own address space still
+    loaded (no CR3 switch on <code>int 0x80</code> entry), so
+    dereferencing a ring3-supplied pointer needs no special mechanism —
+    but nothing here validates that a pointer/handle argument actually
+    belongs to the calling process. See
+    <a href="#limitations">Known limitations</a>.
+</div>
+
+<h2 id="native-api">The native API</h2>
+<p>
+    Ring3 processes are real, <code>minicc</code>-compiled MiniC programs
+    (see <a href="#compiled-ring3">below</a>), and the native API is real
+    <code>obj.method()</code> syntax wrapping the syscalls above — not raw
+    syscall numbers.
+</p>
+<div class="code-label">File — whole-file, path-based (no open/close/seek at the kernel level)</div>
+<pre><code>struct File { char* path; }
+
+u64 File.write(File* self, char* buf, u64 len);
+u64 File.read(File* self, char* buf, u64 maxLen);</code></pre>
+<div class="code-label">Channel</div>
+<pre><code>struct Channel { int index; }
+
+bool Channel.send(Channel* self, u64 value);
+u64  Channel.receive(Channel* self);   // blocks</code></pre>
+<div class="code-label">Process</div>
+<pre><code>struct Process { char* path; }
+
+u64 Process.spawn(Process* self, u64 loadVaddr, u64 stackVaddr);
+// returns the new process's task index, or -1</code></pre>
+
+<h2 id="posix-shim">The POSIX-shaped shim</h2>
+<p>
+    <code>open</code>/<code>read</code>/<code>write</code>/<code>close</code>
+    — plain free functions, deliberately not methods, matching POSIX's
+    real API shape rather than extending the native OO-style one.
+    Implemented <strong>entirely in ring3 MiniC</strong>, with no new
+    syscalls and no kernel changes: since <code>File</code> is whole-file
+    only, <code>open()</code> loads (or starts) a per-fd in-memory buffer
+    once, <code>read()</code>/<code>write()</code> serve out of it while
+    advancing a position cursor, and <code>close()</code> flushes a
+    written buffer through <code>File.write()</code> in one shot.
+</p>
+<pre><code>int open(char* path, int mode);   // 0 = read, 1 = write (create)
+int read(int fd, char* buf, int len);
+int write(int fd, char* buf, int len);
+int close(int fd);</code></pre>
+<div class="note">
+    A real, small gap from true POSIX: only one open-for-write "session"
+    can safely target a given path at a time — there's no kernel-side
+    file-descriptor concept backing this, just a per-process in-memory
+    table.
+</div>
+
+<h2 id="compiled-ring3">Compiled MiniC in ring 3</h2>
+<p>
+    Ring3 programs are real, <code>minicc --freestanding</code>-compiled
+    MiniC — not hand-assembled machine code. The loader's model is
+    dead-simple (copy one contiguous byte range, jump to its first byte),
+    which doesn't survive unmodified for compiled output: string literals
+    land in <code>.rodata</code> and globals in <code>.bss</code>/
+    <code>.data</code>, separate ELF sections that a normal multi-object
+    link would scatter apart. Fixed with a build-step, not a
+    compiler-level, change: the ring3 program gets its own
+    <strong>standalone link</strong> (<code>proc/ring3.ld</code>, every
+    section placed contiguously) and gets flattened with
+    <code>objcopy -O binary</code> before being embedded — the loader
+    itself never changed.
+</p>
+<p>
+    <code>asm(...)</code> has no operand binding, so a syscall's arguments
+    can't be received in a register and used immediately — a small
+    <code>doSyscall(num, arg1, arg2, arg3)</code> helper stages them into
+    globals first, then one <code>asm(...)</code> block loads them into
+    <code>rax</code>/<code>rdi</code>/<code>rsi</code>/<code>rdx</code>
+    right before <code>int 0x80</code>.
+</p>
+
+<h2 id="testing">Testing methodology</h2>
+<p>
+    Every claim in this project is backed by a concrete, checkable
+    assertion — never just "it didn't crash." An exact byte count matching
+    hand arithmetic, a register value read back and printed (proving real
+    CPL 3, not just "a syscall happened"), a physical address that
+    genuinely differs between two isolated processes mapping the identical
+    virtual address, a frame-allocator count identical before and after an
+    operation that must not leak. See the
+    <a href="examples.html">Walkthrough</a> for what these look like in
+    practice.
+</p>
+<p>
+    Testing runs in QEMU, headless, with serial output redirected to a
+    file and keystrokes sent over the monitor socket:
+</p>
+<pre><code>qemu-system-x86_64 -kernel kernel.elf -display none \
+    -serial file:serial.log -monitor unix:/tmp/qmon,server,nowait \
+    -drive file=disk.img,format=raw,if=ide -no-reboot</code></pre>
+<pre><code>echo 'sendkey h' | nc -U /tmp/qmon   # types 'h'
+echo 'sendkey spc' | nc -U /tmp/qmon # space
+echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
+
+<h2 id="limitations">Known limitations (on purpose, for now)</h2>
+<ul>
+<li><strong>The shared identity-map/heap region is still fully user-accessible</strong> in every address space — real isolation only covers each process's <em>private</em> region (<code>vaddr &gt;= 0x80000000</code>). A real memory-protection pass over the shared region is planned once capability/security work is underway.</li>
+<li><strong>Syscall arguments (pointers, handles, channel indices) are checked for validity/bounds but not ownership</strong> — a ring3 process that knows or guesses a valid handle/channel index for a resource it wasn't actually given can still touch it. Real per-resource access control is a later milestone.</li>
+<li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
+<li><strong>Channels aren't wrapped as kernel objects/handles</strong> — they're a plain integer index, unlike processes.</li>
+<li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
+<li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
+<li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe/PCI enumeration.</li>
+<li><strong>No networking, no PCI enumeration, no driver framework beyond the handful of hand-rolled drivers</strong> that exist today (VGA, serial, keyboard, PIT/PIC, ATA) — a deliberately late phase, the largest remaining subsystem.</li>
+</ul>
+
+</main>
+
+<footer>
+    MiniC OS is a hobby kernel project, written in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+</footer>
+
+</body>
+</html>

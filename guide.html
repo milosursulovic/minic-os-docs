@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shell Guide — MiniC OS</title>
+<meta name="description" content="Every MiniC OS shell command, grouped by subsystem: heap, paging, scheduler, process model, IPC, disk, filesystem, and VFS.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+    <a class="brand" href="index.html">MiniC OS<span class="dot">.</span></a>
+    <a class="navlink" href="index.html">Home</a>
+    <a class="navlink" href="install.html">Getting Started</a>
+    <a class="navlink active" href="guide.html">Shell Guide</a>
+    <a class="navlink" href="reference.html">Architecture</a>
+    <a class="navlink" href="examples.html">Walkthrough</a>
+    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="download.html">Download</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
+</nav>
+
+<main>
+
+<div class="kicker">Shell Guide</div>
+<h1>The interactive shell</h1>
+<p class="lede">
+    MiniC OS boots straight into a minimal shell over the VGA text buffer
+    — no windowing, no scrolling (the screen wraps once full), just a
+    prompt (<code>&gt;</code>) and a line buffer built directly on the
+    keyboard driver. Every command below is real, backed by a genuine
+    subsystem, not a stub — see the <a href="examples.html">Walkthrough</a>
+    for a full annotated session proving each one.
+</p>
+
+<div class="note">
+    Only lowercase letters, digits, space, <code>/</code>, <code>.</code>,
+    and enter are typeable at the keyboard — there's no shift/caps
+    handling and no backspace/editing yet, so a mistyped line has to be
+    submitted and re-typed. <code>echo</code>/<code>vfscat</code> are the
+    only commands that take a free-form argument.
+</div>
+
+<h2>General</h2>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>help</code></td><td>lists every command</td></tr>
+<tr><td><code>clear</code></td><td>clears the screen (except the boot message on row 0)</td></tr>
+<tr><td><code>echo &lt;text&gt;</code></td><td>prints back whatever follows, verbatim</td></tr>
+</table>
+
+<h2>Timers &amp; interrupts</h2>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>ticks</code></td><td>prints the current PIT tick counter (<code>gTickCount</code>), incremented by the timer interrupt at ~100Hz nominal (QEMU/TCG's actual effective rate varies a lot, often several times faster)</td></tr>
+</table>
+
+<h2>Heap</h2>
+<p>
+    A free-list allocator (<code>kalloc</code>/<code>kfree</code>) with
+    two-way coalescing, growing on demand by mapping fresh physical frames
+    rather than a fixed arena.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>alloc</code></td><td>allocates a fixed 64 bytes, prints the returned address</td></tr>
+<tr><td><code>bigalloc</code></td><td>allocates enough to force the heap to grow past its current mapped region in one call</td></tr>
+<tr><td><code>free</code></td><td>frees the <em>last</em> allocation (tracked automatically)</td></tr>
+<tr><td><code>free &lt;addr&gt;</code></td><td>frees a specific hex address (bounds-checked — an address outside the heap arena is silently ignored, not a crash)</td></tr>
+<tr><td><code>mem</code></td><td>prints free/total heap bytes</td></tr>
+<tr><td><code>reset</code></td><td>collapses the free list back to one block over whatever's already mapped (doesn't unmap/re-grow — that would leak a physical frame per byte remapped)</td></tr>
+</table>
+
+<h2>Physical frames</h2>
+<p>
+    A bitmap allocator (<code>allocFrame</code>/<code>freeFrame</code>)
+    built by parsing the real multiboot memory map at boot.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>frame</code></td><td>allocates one physical frame, prints its address</td></tr>
+<tr><td><code>unframe</code></td><td>frees the last allocated frame</td></tr>
+<tr><td><code>frames</code></td><td>prints free/total frame counts</td></tr>
+</table>
+
+<h2>Paging</h2>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>map</code></td><td>maps a freshly allocated frame at a fixed demo virtual address a full 1GB past the boot-time static identity map, writes a known constant through it, and reads it back — proves the whole PML4→PDPT→PD→PT walk, not just that an address came back</td></tr>
+</table>
+
+<h2>Scheduler</h2>
+<p>
+    A preemptive scheduler — the timer interrupt forces a task switch, not
+    just voluntary <code>yield()</code> — with real blocking
+    (<code>sleep()</code> takes a task out of the round-robin for a given
+    tick count).
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>tasks</code></td><td>prints the boot-time demo tasks' counters: two purely cooperative tasks (lockstep), one that never yields at all (runs orders of magnitude further, proving preemption forces it off the CPU periodically), and one that sleeps between increments (its count tracks <code>ticks / sleepInterval</code>)</td></tr>
+</table>
+
+<h2>Process isolation demo</h2>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>procs</code></td><td>two boot-time demo tasks (<code>procA</code>/<code>procB</code>), each with its own private address space, both mapping the <em>identical</em> virtual address to their own physical frame — prints each one's value and physical address, proving real isolation (not just separate stacks)</td></tr>
+</table>
+
+<h2>Process model &amp; kernel objects</h2>
+<p>
+    An NT-style object model: a kernel-wide object table plus a
+    per-process handle table. Ring 3 code only ever sees a small integer
+    handle — bounds-checked and existence-checked on every use, never
+    trusted as a raw index.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>ps</code></td><td>lists every real process (task index, private address-space base <code>cr3</code>)</td></tr>
+<tr><td><code>objs</code></td><td>lists every kernel object (type, backing data index)</td></tr>
+</table>
+
+<h2>IPC (channels)</h2>
+<p>
+    A channel is a single-slot mailbox. <code>send</code> is non-blocking
+    (fails if the mailbox is already full); a blocking <code>receive()</code>
+    reuses the exact scheduler primitive <code>sleep()</code> already
+    uses, generalized to a second wake condition.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>chan</code></td><td>shows whether the boot-time demo receiver process has gotten a message yet, and what value</td></tr>
+<tr><td><code>send</code></td><td>sends a fixed demo value on that same channel — the blocked receiver wakes up on its own, from a separate isolated address space</td></tr>
+<tr><td><code>ring3go</code></td><td>sends a trigger on a <em>second</em>, dedicated channel — this one wakes the boot-time ring3 <em>process's own</em> blocking <code>Channel.receive()</code> syscall, which then goes on to call <code>Process.spawn()</code> and launch a second copy of itself (run <code>install</code> first so the file it spawns actually exists on disk)</td></tr>
+</table>
+
+<h2>Raw disk I/O</h2>
+<p>
+    A legacy ATA PIO driver talking directly to the classic ISA IDE ports
+    — polling, not interrupt-driven, with a bounded wait so a missing
+    drive fails cleanly instead of hanging.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>disk</code></td><td>reads sector (LBA) 1 and prints its content — a fixed signature the test disk image was built with, proving real reads against known content</td></tr>
+<tr><td><code>diskwrite</code></td><td>writes a distinct 512-byte pattern to a different sector, reads it straight back, and reports whether all 512 bytes matched</td></tr>
+</table>
+
+<h2>MiniFS (the filesystem)</h2>
+<p>
+    A minimal custom filesystem: a fixed-layout superblock, a one-sector
+    16-entry flat directory, and a contiguous per-file data region.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>mkfs</code></td><td>formats the disk — writes a fresh superblock and an empty directory (destructive: existing files become unreachable)</td></tr>
+<tr><td><code>mkfile</code></td><td>creates a new file with an auto-generated name/content (<code>file0.mfs</code>, <code>file1.mfs</code>, ...) — fails if that exact name already exists</td></tr>
+<tr><td><code>cat</code></td><td>prints the content of the most recently created file</td></tr>
+<tr><td><code>ls</code></td><td>lists every file (name + size) plus the superblock's own file count, for cross-checking</td></tr>
+</table>
+
+<h2>VFS</h2>
+<p>
+    A basic namespace: <code>/system</code> routes to MiniFS (real disk
+    I/O), <code>/devices</code> routes to a second backend reflecting live
+    kernel state — the identical function call reaches two completely
+    different mechanisms depending only on the path prefix.
+</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>vfscat &lt;path&gt;</code></td><td>reads and prints a file through the VFS — try <code>vfscat /system/file0.mfs</code> (real disk) or <code>vfscat /devices/ticks</code> (live kernel state, no disk touched)</td></tr>
+<tr><td><code>vfswrite</code></td><td>writes a fixed demo file to <code>/system/vfsdemo.mfs</code> through the VFS (not MiniFS directly)</td></tr>
+</table>
+
+<h2>Process loading from disk</h2>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>install</code></td><td>writes the kernel's own compiled-in ring3 test program out to <code>/system/testprog.bin</code> — simulating a program actually being installed on disk</td></tr>
+<tr><td><code>spawn</code></td><td>reads that file back through the VFS and launches a brand-new, independent process from it — the shell's own path to "launch a program," in kernel mode; see <code>ring3go</code> above for a ring3 process launching <em>itself</em> a second instance</td></tr>
+</table>
+
+</main>
+
+<footer>
+    MiniC OS is a hobby kernel project, written in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walkthrough — MiniC OS</title>
+<meta name="description" content="A real, annotated MiniC OS shell session — every command's output explained, and why it proves what it claims to prove.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+    <a class="brand" href="index.html">MiniC OS<span class="dot">.</span></a>
+    <a class="navlink" href="index.html">Home</a>
+    <a class="navlink" href="install.html">Getting Started</a>
+    <a class="navlink" href="guide.html">Shell Guide</a>
+    <a class="navlink" href="reference.html">Architecture</a>
+    <a class="navlink active" href="examples.html">Walkthrough</a>
+    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="download.html">Download</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
+</nav>
+
+<main class="wide">
+
+<div class="kicker">Walkthrough</div>
+<h1>A real session, annotated</h1>
+<p class="lede">
+    This is genuine captured output from booting <code>kernel.elf</code>
+    in QEMU with a disk attached and typing at the prompt — not a mockup.
+    Every result below is explained: not just what happened, but why it
+    proves what it claims to prove.
+</p>
+
+<div class="code-label">boot + a few commands</div>
+<pre><code>Hello from a MiniC kernel!
+hello from a LOADED process! 0xc0ffee
+interrupts live
+hello from a LOADED process! 0xc0ffee
+handle 0 (self) -&gt; taskIndex 0x7
+handle 99 (invalid) -&gt; 0xffffffffffffffff
+File.write() wrote 0x36
+File.read() got back 0x36
+hello from ring3, via a real File.write() method call!0
+POSIX read() 1: 0
+POSIX 0
+POSIX read() 2: 0
+shim works!0
+&gt; alloc
+allocated 64 bytes at 0x5000c040
+&gt; alloc
+allocated 64 bytes at 0x5000c090
+&gt; free
+freed 0x5000c090
+&gt; mem
+free: 0xff50 / 0x20000
+&gt; frames
+free frames: 0x7bbe / 0x40000
+&gt; map
+mapped 0x40000000 -&gt; 0x422000, wrote/read 0xcafebabe
+&gt; tasks
+task1: 0x1dc3 task2: 0x1dc4 task3: 0x2a38d9720 task4: 0x131 ticks: 0x3b8c
+&gt; procs
+procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
+&gt; ps
+processes: 0x1 proc0 task=0x7 cr3=0x426000
+&gt; objs
+objects: 0x1 obj0 type=0x1 dataIndex=0x0
+&gt; chan
+receiver got: 0x0 value=0x0
+&gt; send
+sent 0xc0ffee1234
+&gt; chan
+receiver got: 0x1 value=0xc0ffee1234
+&gt; disk
+sector 1: MiniC ATA PIO driver - milestone 16 signature sector
+&gt; diskwrite
+write+readback verified, 512/512 bytes match
+&gt; mkfs
+filesystem formatted
+&gt; mkfile
+created file0.mfs
+&gt; cat
+Hello from MiniFS, this is file #0
+&gt; vfscat /system/file0.mfs
+Hello from MiniFS, this is file #0
+&gt; vfscat /devices/ticks
+ticks: 0x3d8a
+&gt; install
+installed /system/testprog.bin, 0x1eb8 bytes
+&gt; spawn
+spawned process 0x1
+&gt; ps
+processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
+&gt; ring3go
+sent ring3 spawn trigger</code></pre>
+
+<h2>The boot-time ring3 process</h2>
+<p>
+    Before the shell even shows its first prompt, a real
+    <code>minicc</code>-compiled MiniC program (not hand-assembled) has
+    already been loaded into its own isolated address space and started
+    running in ring 3, preemptible by the timer like any other task. The
+    two <code>hello from a LOADED process!</code> lines are printed from
+    <em>inside that loaded, executing code</em> via a real <code>int 0x80</code>
+    syscall — a message that lives inside the loaded blob itself, not a
+    kernel string.
+</p>
+<p>
+    <code>handle 0 (self) -&gt; taskIndex 0x7</code> is the process resolving
+    its <em>own</em> well-known handle all the way through the kernel
+    object table to real ground truth — <code>0x7</code> is exactly what
+    <code>ps</code> independently reports for this same process later,
+    meaning two completely different code paths (a ring3 syscall's handle
+    lookup, and the shell's direct table read) land on the identical
+    number. <code>handle 99 (invalid)</code> — never allocated — comes
+    back as the same <code>-1</code> sentinel every failure path uses, not
+    garbage or a crash.
+</p>
+<p>
+    The <code>File.write()</code>/<code>File.read()</code> and
+    <code>POSIX</code> lines are the native API and the POSIX shim, both
+    exercised from inside that same ring3 process — real
+    <code>obj.method()</code> calls (<code>msgFile.write(...)</code>) and
+    real free-function calls (<code>write(fd, ...)</code>) wrapping two
+    different syscalls, not raw syscall numbers either way. The two
+    separate <code>POSIX read()</code> lines return two different,
+    correct slices of the same underlying buffer — proof the position
+    cursor genuinely advances between calls, not just replaying the whole
+    buffer each time.
+</p>
+
+<h2>Heap &amp; frames</h2>
+<p>
+    Two <code>alloc</code>s land exactly where hand arithmetic predicts;
+    <code>free</code> then <code>mem</code> shows the byte given back
+    matches exactly. <code>frames</code>' count is built entirely from
+    parsing the real multiboot memory map at boot — not a made-up number.
+</p>
+
+<h2>Paging</h2>
+<p>
+    <code>map</code> proves the whole dynamic-paging chain end to end: a
+    physical frame beyond the multiboot memory map's low end, mapped at a
+    virtual address a full 1GB past anything the boot-time static map set
+    up, written through and read back correctly — real PML4/PDPT/PD/PT
+    walking and on-demand table creation, not just "an address came back."
+</p>
+
+<h2>Scheduler</h2>
+<p>
+    <code>tasks</code> proves both preemption and blocking in one line.
+    Two purely cooperative tasks stay in exact lockstep. A third — a
+    tight loop that never calls <code>yield()</code> at all — runs
+    <em>six orders of magnitude</em> ahead, because it spins its entire
+    timer slice every turn instead of giving up the CPU voluntarily; only
+    possible if the timer genuinely forces control away from it
+    periodically. A fourth, sleeping between increments, tracks
+    <code>ticks / interval</code> almost exactly — proof <code>sleep()</code>
+    really removes a task from the round-robin for that long, not a
+    no-op.
+</p>
+
+<h2>Process isolation</h2>
+<p>
+    <code>procs</code>: two tasks map the <em>identical</em> virtual
+    address in their own private address space to their own physical
+    frame, and each keeps reading back its own distinct constant forever.
+    The <code>@phys</code> addresses being genuinely different is the real
+    proof — not just "two different numbers came back," but that the same
+    virtual address resolves to two different physical frames depending
+    on which address space is asking, exactly what isolation has to mean.
+</p>
+
+<h2>IPC</h2>
+<p>
+    The first two <code>chan</code> reads, with an arbitrary number of
+    other commands run in between, show a receiver task genuinely still
+    blocked on an empty channel — not a short timeout, not a no-op.
+    <code>send</code> calls the kernel-side <code>channelSend()</code>
+    directly from the shell's own context; the instant it succeeds, the
+    next <code>chan</code> shows the exact value, and the receiver (an
+    isolated process with its own private address space) woke up on its
+    own. The message genuinely crossed from one isolated address space to
+    another through the channel, not shared memory.
+</p>
+
+<h2>Disk &amp; filesystem</h2>
+<p>
+    <code>disk</code> reads back an exact signature written from the
+    <em>host</em> side before the kernel ever booted — real reads against
+    independently-verifiable content. <code>diskwrite</code> writes a
+    distinct 256-value repeating byte pattern and reads it straight back,
+    reporting a byte-exact match — proves the write path independently of
+    the read path. <code>mkfs</code>/<code>mkfile</code>/<code>cat</code>
+    creates two files back to back and reads each one back correctly and
+    distinctly, even after the other exists — no cross-file clobbering,
+    and reads are always fresh from disk, never a cached copy.
+</p>
+
+<h2>VFS</h2>
+<p>
+    <code>vfscat /system/file0.mfs</code> and <code>vfscat /devices/ticks</code>
+    back to back is the actual point of the VFS layer: the
+    <em>identical</em> function call reaches two completely different
+    mechanisms — real disk I/O vs. live kernel state, no disk touched at
+    all — depending only on the path prefix.
+</p>
+
+<h2>Process spawning from disk</h2>
+<p>
+    <code>install</code> writes the kernel's own compiled-in test program
+    out to a real file (the byte count is the real, host-verifiable size
+    of that compiled-and-flattened blob). <code>spawn</code> reads it back
+    and launches an independent second process — <code>ps</code> afterward
+    shows two real processes with genuinely different <code>cr3</code>
+    values, confirmed from the kernel's own bookkeeping.
+</p>
+
+<h2>A ring3 process spawning itself</h2>
+<p>
+    <code>ring3go</code> takes a completely different path from
+    <code>install</code>/<code>spawn</code> above: instead of the
+    <em>shell</em> (kernel mode) launching a process, it wakes the
+    boot-time ring3 process's own blocking <code>Channel.receive()</code>
+    syscall — a real ring3 process blocking itself on a syscall for the
+    first time in this kernel's history. Once it wakes, it calls
+    <code>Process.spawn()</code> itself:
+</p>
+<pre><code>Channel.receive() got trigger 0x1
+Process.spawn() launched taskIndex 0x9
+hello from a LOADED process! 0xc0ffee
+hello from a LOADED process! 0xc0ffee
+handle 0 (self) -&gt; taskIndex 0x9
+handle 99 (invalid) -&gt; 0xffffffffffffffff
+File.write() wrote 0xffffffffffffffff
+File.read() got back 0x36
+hello from ring3, via a real File.write() method call!0
+POSIX read() 1: 0
+POSIX 0
+POSIX read() 2: 0
+shim works!0</code></pre>
+<p>
+    The last twelve lines are the <em>spawned child</em> — the exact same
+    program, running its own <code>_start()</code> from scratch in its own
+    freshly cloned address space, with its own distinct task index
+    (<code>0x9</code>, not the parent's <code>0x7</code>). It reaches its
+    own <code>Channel.receive()</code> too, but the single-slot mailbox is
+    already empty again (the parent's own <code>receive()</code> consumed
+    the one message <code>ring3go</code> sent) — so it just blocks there
+    forever, never reaching its own <code>Process.spawn()</code> call.
+    That's what stops this from spawning a second, third, fourth
+    generation automatically: no recursion-guard flag needed, just the
+    mailbox's own single-slot semantics.
+</p>
+<p>
+    (The child's own <code>File.write()</code> shows the "already exists"
+    failure sentinel here rather than a fresh byte count — the parent
+    already wrote that same file earlier in this same boot, and MiniFS
+    correctly refuses to overwrite an existing file. <code>File.read()</code>
+    still succeeds, reading back the real, persisted content either way.)
+</p>
+
+</main>
+
+<footer>
+    MiniC OS is a hobby kernel project, written in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap — MiniC OS</title>
+<meta name="description" content="Every MiniC OS milestone, what's done, and what's next — from boot to real interrupts through ring3 isolation, IPC, a filesystem, and a native API with a POSIX shim.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+    <a class="brand" href="index.html">MiniC OS<span class="dot">.</span></a>
+    <a class="navlink" href="index.html">Home</a>
+    <a class="navlink" href="install.html">Getting Started</a>
+    <a class="navlink" href="guide.html">Shell Guide</a>
+    <a class="navlink" href="reference.html">Architecture</a>
+    <a class="navlink" href="examples.html">Walkthrough</a>
+    <a class="navlink active" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="download.html">Download</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
+</nav>
+
+<main class="wide">
+
+<div class="kicker">Roadmap</div>
+<h1>Every milestone, in order</h1>
+<p class="lede">
+    Each milestone below was scoped as one hard problem, proven with a
+    concrete assertion in QEMU, then shipped — not designed far in
+    advance. The long-term architecture (a UNIX namespace/shell + NT-style
+    kernel objects/handles + microkernel-ish IPC/service isolation + a
+    capability security model, exposed through a native MiniC API with a
+    POSIX compatibility layer on top) is planned in phases, each becoming
+    a real numbered milestone when its turn comes.
+</p>
+
+<h2>Milestones 1–10: the foundation</h2>
+<ul>
+<li><strong>1: boot to 64-bit long mode + VGA text output</strong> <span class="tag">done</span> — a multiboot1 image boots in QEMU, transitions from 32-bit protected mode into 64-bit long mode, and writes to the VGA text buffer directly from ordinary MiniC. The 32-to-64-bit transition is hand-written in <code>boot/boot.s</code> — below what <code>asm(...)</code> can express, same as every kernel project. Everything past that point is MiniC.</li>
+<li><strong>2: real interrupts</strong> <span class="tag">done</span> — an IDT built as an ordinary MiniC array of <code>packed struct</code> entries, the 8259 PIC remapped, the PIT reconfigured to ~100Hz, working timer + keyboard handlers.</li>
+<li><strong>3: heap + a minimal shell</strong> <span class="tag">done</span> — a bump allocator over the identity map, plus an interactive shell built on the keyboard handler's line buffer.</li>
+<li><strong>4: a real free-list heap</strong> <span class="tag">done</span> — <code>kalloc</code> splits blocks, <code>kfree</code> coalesces adjacent free ones forward.</li>
+<li><strong>5: two-way coalescing + a physical frame allocator</strong> <span class="tag">done</span> — <code>kfree</code> coalesces backward too, and a frame bitmap allocator is built from the multiboot memory map.</li>
+<li><strong>Language cleanup</strong> <span class="tag">done</span> — five milestones of real kernel code surfaced six genuine MiniC language gaps (char literals, char arithmetic, a rigid <code>sizeof</code>, no <code>break</code>/<code>continue</code>, array decay stopping short of <code>void*</code>, <code>extern</code> restricted to functions) — all fixed as real compiler features in the <a href="https://github.com/milosursulovic/minic">minic</a> repo.</li>
+<li><strong>6: real dynamic paging</strong> <span class="tag">done</span> — walks/creates a full PML4→PDPT→PD→PT chain of 4KB pages on demand, so the kernel can map memory anywhere, not just inside the static identity map.</li>
+<li><strong>7: a frame-backed, dynamically growing heap</strong> <span class="tag">done</span> — the heap grows a chunk at a time as the free list runs dry, instead of a fixed reservation.</li>
+<li><strong>8: a cooperative scheduler</strong> <span class="tag">done</span> — a hand-written context switch, a fixed table of tasks each with its own stack, round-robin via voluntary <code>yield()</code>.</li>
+<li><strong>9: preemptive scheduling</strong> <span class="tag">done</span> — the timer interrupt now forces a task switch, not just voluntary cooperation.</li>
+<li><strong>10: real task blocking via <code>sleep()</code></strong> <span class="tag">done</span> — a task can step out of the round-robin for a given number of ticks.</li>
+</ul>
+
+<p>
+    At this point everything still ran in ring 0, sharing one page-table
+    hierarchy — "tasks" were kernel threads, not isolated processes. The
+    long-term architecture plan was settled here, and every milestone
+    since has been a real numbered step toward it.
+</p>
+
+<h2>Phase I–V: ring 3, isolation, the object model, IPC</h2>
+<ul>
+<li><strong>11: ring 3 + syscalls</strong> <span class="tag">done</span> — the first real ring0/ring3 privilege boundary: a GDT ring3 code/data pair, a TSS (<code>RSP0</code> on its own dedicated stack), and an <code>int 0x80</code> syscall gate (DPL=3) with a minimal dispatcher. Address-space isolation deliberately deferred — proving the privilege-transition mechanism itself came first. Verified by reading back <code>cs=0x1B</code> from inside ring3 (real CPL 3, not just "a syscall happened").</li>
+<li><strong>12: per-process address spaces</strong> <span class="tag">done</span> — real address-space isolation: each task can get its own PML4, with a private region no other task can see even at the identical virtual address. Verified: the same virtual address genuinely resolves to two different physical frames depending on which address space is asking.</li>
+<li><strong>13: a real Process concept + a loader</strong> <span class="tag">done</span> — wires ring3/syscalls and per-process address spaces together: a loader copies a byte range into a freshly cloned private address space and schedules it as a genuinely preemptible ring3 task.</li>
+<li><strong>14: kernel object model + per-process handle tables</strong> <span class="tag">done</span> — the NT-style piece: a kernel-wide object table plus a per-process handle table, bounds-checked and existence-checked, never trusted as a raw index.</li>
+<li><strong>15: IPC channels between isolated processes</strong> <span class="tag">done</span> — real blocking message-passing, reusing the scheduler's existing blocking mechanism (a second wake condition alongside the existing tick check) instead of inventing a second one.</li>
+</ul>
+
+<h2>Phase VI–VII: storage, VFS, real process spawning</h2>
+<ul>
+<li><strong>16: a legacy ATA PIO disk driver</strong> <span class="tag">done</span> — the first real storage I/O this kernel has ever done, talking directly to the classic ISA IDE ports. Verified three independent ways, including confirming a write directly in the disk image file from the host afterward.</li>
+<li><strong>17: MiniFS, a minimal custom filesystem</strong> <span class="tag">done</span> — a fixed-layout superblock + a one-sector flat directory + a contiguous per-file data region. Verified formatting, creating two files, and reading each back correctly and distinctly.</li>
+<li><strong>18: a VFS abstraction over MiniFS</strong> <span class="tag">done</span> — a basic namespace (<code>/system</code>, <code>/devices</code>) via a small mount table — the identical read call reaches two completely different mechanisms depending only on the path prefix.</li>
+<li><strong>19: real Process.spawn() from disk</strong> <span class="tag">done</span> — "the shell launches a program" becomes genuinely real, reading a file through the VFS instead of a statically embedded blob. Running two ring3-capable processes at once immediately reproduced a real <code>TSS.RSP0</code> collision, fixed by giving every ring3 task its own private RSP0 target.</li>
+</ul>
+
+<h2>Phase VIII: MiniC methods, the native API, a POSIX shim</h2>
+<ul>
+<li><strong>20: real method-call syntax in MiniC itself</strong> <span class="tag">done</span> — a compiler-repo milestone, not a kernel one: <code>&lt;ReturnType&gt; &lt;StructName&gt;.&lt;methodName&gt;(&lt;StructName&gt;* self, ...)</code> declarations. Needed zero parser changes at call sites — every bit of new logic lives in codegen. Pure syntax sugar, not a new dispatch mechanism. See <a href="https://github.com/milosursulovic/minic">minic</a>'s <code>examples/methods_demo.mc</code>.</li>
+<li><strong>21: a real compiled-MiniC program running in ring3</strong> <span class="tag">done</span> — every ring3 program until now was hand-assembled; the loader's "copy one contiguous byte range, jump to its first byte" model doesn't survive unmodified for compiled output, since string literals and globals land in separate ELF sections. Fixed with a standalone link + <code>objcopy -O binary</code> flattening step, no compiler changes.</li>
+<li><strong>22: a real native "File" API with real methods</strong> <span class="tag">done</span> — the first slice of the native System API. Two new syscalls expose VFS read/write to ring3 for the first time; <code>File.write(...)</code>/<code>File.read(...)</code> are real methods wrapping them — the first time this kernel's method-call syntax got used for something real.</li>
+<li><strong>23: real Process/Channel methods</strong> <span class="tag">done</span> — wraps the other two native-API resources the same way. <code>channelReceive</code> is this kernel's first ever <em>blocking</em> syscall. A ring3 process blocks on an operator-triggered channel and then spawns a second instance of itself once triggered.</li>
+<li><strong>24: a thin POSIX-shaped shim</strong> <span class="tag">done</span> — <code>open</code>/<code>read</code>/<code>write</code>/<code>close</code>, implemented entirely in ring3 MiniC over the existing File API, no new syscalls or kernel changes. Growing the compiled ring3 program past one page for the first time surfaced three real, previously-latent kernel bugs — see the <a href="reference.html#compiled-ring3">Architecture</a> page.</li>
+</ul>
+<p>
+    <strong>Phase VIII (milestones 20–24) is complete.</strong> See the
+    <a href="reference.html">Architecture</a> page for the technical
+    detail behind each of these, and the
+    <a href="examples.html">Walkthrough</a> for real captured proof.
+</p>
+
+<h2>What's next</h2>
+<ul>
+<li><strong>Phase IX — capability/permission system</strong> on top of the handle table, then security hardening (NX/ASLR/sandboxing on the still fully user-accessible shared identity-map region).</li>
+<li><strong>Phase X — a real driver framework (PCI enumeration) + networking</strong> (NIC driver, a from-scratch TCP/IP stack) — deliberately last: the largest remaining subsystem, with the fewest things depending on it.</li>
+<li><strong>Phase XI — service architecture + a real <code>init</code></strong> — the current hardcoded shell loop migrates to an actual userspace program once processes/IPC/VFS exist to support that; async I/O as a cross-cutting pass once sync I/O works everywhere.</li>
+</ul>
+<p>
+    Self-hosting (<code>minicc</code>, compiled for MiniC OS's own target,
+    running <em>on</em> MiniC OS to compile something) isn't one of these
+    phases — it's an ongoing checkpoint tried after each major phase, with
+    the real prerequisites (native API, real file I/O, real process
+    spawning) already in place as of Phase VIII.
+</p>
+
+<h2>Known limitations</h2>
+<p>
+    See the <a href="reference.html#limitations">Architecture page's
+    Known Limitations section</a> for the current, detailed list.
+</p>
+
+</main>
+
+<footer>
+    MiniC OS is a hobby kernel project, written in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+</footer>
+
+</body>
+</html>

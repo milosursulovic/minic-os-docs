@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting Started — MiniC OS</title>
+<meta name="description" content="Boot MiniC OS in QEMU in one command, build it from source, or run the ISO in VirtualBox, VMware, or on real hardware.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+    <a class="brand" href="index.html">MiniC OS<span class="dot">.</span></a>
+    <a class="navlink" href="index.html">Home</a>
+    <a class="navlink active" href="install.html">Getting Started</a>
+    <a class="navlink" href="guide.html">Shell Guide</a>
+    <a class="navlink" href="reference.html">Architecture</a>
+    <a class="navlink" href="examples.html">Walkthrough</a>
+    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="download.html">Download</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
+</nav>
+
+<main>
+
+<div class="kicker">Getting Started</div>
+<h1>Running MiniC OS</h1>
+<p class="lede">
+    The fastest path is QEMU with a pre-built kernel image — one command,
+    no toolchain needed. Building from source, or running outside QEMU
+    entirely (VirtualBox, VMware, real hardware), are both covered below
+    too.
+</p>
+
+<h2>1. The fast path: QEMU</h2>
+<p>
+    Install QEMU if you don't have it:
+</p>
+<pre><code>sudo apt install qemu-system-x86      # Debian/Ubuntu/WSL
+# or your distro's equivalent package</code></pre>
+<p>
+    Grab <code>minic-kernel.elf</code> from <a href="download.html">Download</a>,
+    then:
+</p>
+<pre><code>qemu-system-x86_64 -kernel minic-kernel.elf</code></pre>
+<div class="note">
+    <code>-kernel</code> is a QEMU-only shortcut — QEMU understands the
+    multiboot1 format the kernel is built as and loads it directly, no
+    bootloader needed. Nothing else (VirtualBox, VMware, real hardware)
+    can do this; see <a href="#other-hypervisors">running outside QEMU</a>
+    below for those.
+</div>
+<p>
+    You should see the kernel boot straight to a shell prompt (<code>&gt;</code>,
+    on the second row of the screen). Lowercase letters, digits, space, and
+    enter all work at the keyboard. Try <code>help</code> to see every
+    command, or jump into the <a href="guide.html">Shell Guide</a> for what
+    each one actually does.
+</p>
+
+<h3>Attaching a disk</h3>
+<p>
+    The disk/filesystem commands (<code>disk</code>, <code>diskwrite</code>,
+    <code>mkfs</code>, <code>mkfile</code>, <code>cat</code>, <code>ls</code>,
+    <code>vfscat</code>, <code>vfswrite</code>, <code>install</code>,
+    <code>spawn</code>, <code>ring3go</code>) need a real IDE drive attached
+    — everything else works identically with or without one:
+</p>
+<pre><code>qemu-system-x86_64 -kernel minic-kernel.elf \
+    -drive file=disk.img,format=raw,if=ide</code></pre>
+<p>
+    Any raw disk image works — create an empty one with <code>dd</code> if
+    you don't have one yet:
+</p>
+<pre><code>dd if=/dev/zero of=disk.img bs=512 count=2048   # 1MB</code></pre>
+<div class="note">
+    Without <code>-drive</code> attached, disk commands don't crash —
+    <code>disk</code>/<code>diskwrite</code>'s underlying ATA driver polls
+    with a <em>bounded</em> wait (about 1,000,000 spins), so a missing
+    drive fails cleanly after a brief pause and reports
+    <code>disk read failed</code> instead of hanging forever.
+</div>
+
+<h3>Headless (no display)</h3>
+<p>
+    Redirect the serial port to a file instead of attaching a display —
+    useful for scripting or automated testing:
+</p>
+<pre><code>qemu-system-x86_64 -kernel minic-kernel.elf -display none \
+    -serial file:serial.log -no-reboot</code></pre>
+<p>
+    Send keystrokes over QEMU's monitor socket by adding
+    <code>-monitor unix:/tmp/qmon,server,nowait</code>, then
+    <code>echo 'sendkey h' | nc -U /tmp/qmon</code> and similar — see the
+    <a href="reference.html#testing">Architecture</a> page for the full
+    recipe this project's own test suite uses.
+</p>
+
+<h2 id="build-from-source">2. Building from source</h2>
+<p>
+    MiniC OS is written in MiniC, compiled by <code>minicc</code> from the
+    <a href="https://github.com/milosursulovic/minic">MiniC compiler repo</a>
+    — you need a <strong>Linux-built</strong> <code>minicc</code> even if
+    you're doing everything else on Windows, since the kernel's own build
+    toolchain (<code>as</code>/<code>ld</code>/<code>grub-mkrescue</code>)
+    is Linux-only. WSL works fine for this on Windows.
+</p>
+<pre><code>sudo apt install build-essential cmake   # if not already installed
+
+git clone git@github.com:milosursulovic/minic.git
+cd minic
+cmake -S . -B build-linux
+cmake --build build-linux
+cd ..
+
+git clone git@github.com:milosursulovic/minic-os.git
+cd minic-os
+./build.sh</code></pre>
+<p>
+    <code>build.sh</code> looks for <code>minicc</code> at
+    <code>../compiler/build-linux/minicc</code> by default (matching the
+    sibling-checkout layout above — clone the compiler into a folder named
+    <code>compiler</code> next to <code>minic-os</code>, or point
+    <code>MINICC</code> at wherever yours actually is):
+</p>
+<pre><code>MINICC=/path/to/minicc ./build.sh</code></pre>
+<p>This produces <code>kernel.elf</code>. Other <code>build.sh</code> subcommands:</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>./build.sh</code></td><td>assembles the boot/interrupt/context-switch stubs, compiles+assembles <code>kmain.mc</code> and the ring3 program, links <code>kernel.elf</code></td></tr>
+<tr><td><code>./build.sh run</code></td><td>also boots it in QEMU with a curses (in-terminal) display, building/attaching <code>disk.img</code> automatically</td></tr>
+<tr><td><code>./build.sh disk</code></td><td>(re)builds <code>disk.img</code> — a small, fixed 1MB test disk image, regenerated from scratch each time</td></tr>
+<tr><td><code>./build.sh iso</code></td><td>also packages a GRUB-bootable <code>minic-os.iso</code> — see <a href="#other-hypervisors">below</a></td></tr>
+</table>
+
+<h2 id="other-hypervisors">3. Running outside QEMU (VirtualBox, VMware, real hardware)</h2>
+<p>
+    QEMU's <code>-kernel</code> flag is a convenience shortcut that only
+    QEMU offers. Everywhere else needs a real bootloader in front of the
+    same kernel image — since the kernel is already multiboot1-compliant,
+    GRUB2 can chainload it directly with zero kernel-side changes, just
+    packaging into a bootable ISO.
+</p>
+<p>
+    Building the ISO needs a few extra host packages:
+</p>
+<pre><code>sudo apt install grub-pc-bin grub-common xorriso mtools
+./build.sh iso   # produces minic-os.iso</code></pre>
+<p>
+    Or grab a pre-built <code>minic-os.iso</code> from
+    <a href="download.html">Download</a>.
+</p>
+
+<h3>VirtualBox</h3>
+<ol>
+<li>New VM — Type "Other", Version "Other/Unknown (64-bit)". No guest
+    additions, no EFI (this kernel boots via legacy BIOS + GRUB).</li>
+<li>128MB of RAM is plenty. A virtual hard disk is optional — the kernel
+    boots fine without one; only the disk/filesystem shell commands need
+    one actually attached.</li>
+<li>Settings → Storage → attach <code>minic-os.iso</code> as the optical
+    drive, and (optionally, for disk commands) attach a raw
+    <code>disk.img</code> as a plain IDE hard disk on the same
+    controller.</li>
+<li>Start the VM — GRUB's menu appears, then boots straight into the
+    kernel.</li>
+</ol>
+<div class="note">
+    VMware and real hardware (write the ISO to a USB stick with
+    <code>dd</code> or a tool like Rufus/balenaEtcher) should work the same
+    way — this hasn't been verified on either yet.
+</div>
+
+<h2>What to try first</h2>
+<p>
+    A short session exercising a few different subsystems at once — see
+    the <a href="guide.html">Shell Guide</a> for every command, or the
+    <a href="examples.html">full walkthrough</a> for a real annotated
+    session:
+</p>
+<pre><code>&gt; alloc
+allocated 64 bytes at 0x5000c040
+&gt; map
+mapped 0x40000000 -&gt; 0x422000, wrote/read 0xcafebabe
+&gt; tasks
+task1: 0x1dc3 task2: 0x1dc4 task3: 0x2a38d9720 task4: 0x131 ticks: 0x3b8c
+&gt; mkfs
+filesystem formatted
+&gt; mkfile
+created file0.mfs
+&gt; cat
+Hello from MiniFS, this is file #0
+&gt; ps
+processes: 0x1 proc0 task=0x7 cr3=0x426000</code></pre>
+
+</main>
+
+<footer>
+    MiniC OS is a hobby kernel project, written in
+    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+</footer>
+
+</body>
+</html>
