@@ -100,7 +100,10 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         existence-checked on every use — never a raw kernel pointer. Real
         per-handle rights, too: a handle granted with receive-only access
         genuinely cannot be used to send, checked at the syscall boundary
-        before the underlying object is ever touched.</p>
+        before the underlying object is ever touched. Extends across
+        processes too — one process can open a handle to another with a
+        requested rights set, and gets back only the intersection of what
+        it asked for and what's actually grantable.</p>
     </div>
     <div class="card">
         <h3>Real IPC</h3>

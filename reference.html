@@ -202,13 +202,14 @@ shell/            the interactive shell
 <table>
 <tr><th>#</th><th>Name</th><th>Arguments</th><th>Notes</th></tr>
 <tr><td>1</td><td>print</td><td>message ptr, hex value</td><td>prints the string then the value in hex</td></tr>
-<tr><td>3</td><td>query handle</td><td>handle</td><td>resolves a handle in the caller's own table, returns ground-truth data (e.g. a process's task index) or a <code>-1</code> sentinel</td></tr>
+<tr><td>3</td><td>query handle</td><td>handle</td><td>resolves a handle in the caller's own table, returns ground-truth data (e.g. a process's task index) or a <code>-1</code> sentinel; requires <code>RIGHT_QUERY</code> as of milestone 27</td></tr>
 <tr><td>4</td><td>vfsRead</td><td>path ptr, buffer ptr, max length</td><td>backs the native <code>File.read()</code></td></tr>
 <tr><td>5</td><td>vfsWrite</td><td>path ptr, buffer ptr, length</td><td>backs the native <code>File.write()</code></td></tr>
 <tr><td>6</td><td>spawn</td><td>path ptr, loadVaddr, stackVaddr</td><td>backs the native <code>Process.spawn()</code> — reuses <code>spawnProcessFromPath()</code> unchanged</td></tr>
 <tr><td>7</td><td>channelSend</td><td>channel handle, value</td><td>backs the native <code>Channel.send()</code>; resolves the handle in the caller's own table and requires <code>RIGHT_SEND</code></td></tr>
 <tr><td>8</td><td>channelReceive</td><td>channel handle</td><td><strong>blocking</strong> — backs <code>Channel.receive()</code>; the first blocking syscall this kernel has; requires <code>RIGHT_RECEIVE</code></td></tr>
 <tr><td>9</td><td>openChannel</td><td>channel index</td><td>backs <code>Channel.open()</code> — the one place a channel index becomes a real handle; always grants <code>RIGHT_RECEIVE</code> only, never <code>RIGHT_SEND</code></td></tr>
+<tr><td>10</td><td>openProcess</td><td>task index, requested rights</td><td>backs <code>ProcessHandle.open()</code> — mints a handle to <em>any</em> process (not just the caller), granting <code>requested &amp; RIGHT_QUERY</code> (the only grantable Process right today)</td></tr>
 </table>
 <div class="note">
     A syscall runs with the calling process's own address space still
@@ -216,7 +217,8 @@ shell/            the interactive shell
     dereferencing a ring3-supplied pointer needs no special mechanism —
     but nothing here validates that a pointer argument actually belongs
     to the calling process (handle arguments <em>are</em> now
-    rights-checked, as of milestone 25 — see
+    rights-checked for both <code>Channel</code> and <code>Process</code>,
+    as of milestones 25 and 27 — see
     <a href="#capabilities">Capabilities</a> below). See
     <a href="#limitations">Known limitations</a> for what's still open.
 </div>
@@ -242,13 +244,25 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     "isn't expected to." See the <a href="examples.html">Walkthrough</a>
     for a real rejected send attempt.
 </p>
-<div class="note">
-    Only <code>Channel</code> is wrapped this way so far. Process handles
-    (still just <code>OBJ_PROCESS</code>) don't yet have a meaningfully
-    differentiated rights set to enforce — extending real per-handle
-    rights to more object types is open, see
-    <a href="roadmap.html">Roadmap</a>.
-</div>
+<p>
+    Milestone 27 extended real enforcement to <code>Process</code>
+    handles too. <code>RIGHT_QUERY</code> had existed since milestone 25
+    and was already granted to every process's own self-handle (since
+    milestone 14) — but syscall 3 never actually checked it, resolving
+    any valid <code>OBJ_PROCESS</code> handle regardless of rights. Now it
+    does, using the same inline check syscalls 7/8/9 use.
+    <code>openProcess</code> (syscall 10) is the first real
+    <strong>cross-process</strong> capability — given another task's
+    index, it mints a handle to that process in the caller's own table,
+    granting the intersection of a caller-<em>requested</em> rights
+    bitmask and what's actually grantable. Requesting <code>0</code>
+    still returns a real, valid handle — just one that can do nothing,
+    which is what the negative-space proof actually exercises: a handle
+    opened with no rights genuinely fails to query, while a second handle
+    to the same process opened with <code>RIGHT_QUERY</code> succeeds and
+    reports the correct taskIndex. See the
+    <a href="examples.html">Walkthrough</a> for the real captured proof.
+</p>
 
 <h2 id="memory-protection">Memory protection on the shared region</h2>
 <p>
@@ -306,11 +320,18 @@ u64 File.read(File* self, char* buf, u64 maxLen);</code></pre>
 bool Channel.open(Channel* self, int channelIndex);   // grants RIGHT_RECEIVE only
 bool Channel.send(Channel* self, u64 value);           // fails without RIGHT_SEND
 u64  Channel.receive(Channel* self);   // blocks; fails without RIGHT_RECEIVE</code></pre>
-<div class="code-label">Process</div>
+<div class="code-label">Process — path-based, spawn only</div>
 <pre><code>struct Process { char* path; }
 
 u64 Process.spawn(Process* self, u64 loadVaddr, u64 stackVaddr);
 // returns the new process's task index, or -1</code></pre>
+<div class="code-label">ProcessHandle — handle-based, query an already-running task (milestone 27)</div>
+<pre><code>struct ProcessHandle { int handle; }
+
+bool ProcessHandle.open(ProcessHandle* self, int taskIndex, int requestedRights);
+// grants requestedRights &amp; RIGHT_QUERY - the only right that's ever grantable
+u64  ProcessHandle.query(ProcessHandle* self);
+// fails without RIGHT_QUERY; else returns the target's real taskIndex</code></pre>
 
 <h2 id="posix-shim">The POSIX-shaped shim</h2>
 <p>
@@ -385,7 +406,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <h2 id="limitations">Known limitations (on purpose, for now)</h2>
 <ul>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
-<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>Channel</code> handles are real, rights-checked capabilities as of milestone 25 (see <a href="#capabilities">Capabilities &amp; rights</a>), but that's the only object type covered so far — <code>Process</code> handles don't have a meaningfully differentiated rights set to enforce yet.</li>
+<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>Channel</code> (milestone 25) and <code>Process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>Process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
 <li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>

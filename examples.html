@@ -245,12 +245,16 @@ sent ring3 spawn trigger</code></pre>
     <code>Process.spawn()</code> itself:
 </p>
 <pre><code>Channel.receive() got trigger 0x1
+hello from a LOADED process! 0xc0ffee
 Process.spawn() launched taskIndex 0x9
 hello from a LOADED process! 0xc0ffee
-hello from a LOADED process! 0xc0ffee
+ProcessHandle.open(rights=0) ok=0x1
+unauthorized ProcessHandle.query() got 0xffffffffffffffff
+ProcessHandle.open(RIGHT_QUERY) ok=0x1
 handle 0 (self) -&gt; taskIndex 0x9
+authorized ProcessHandle.query() got taskIndex 0x9
 handle 99 (invalid) -&gt; 0xffffffffffffffff
-File.write() wrote 0xffffffffffffffff
+File.write() wrote 0x36
 File.read() got back 0x36
 hello from ring3, via a real File.write() method call!0
 POSIX read() 1: 0
@@ -260,20 +264,44 @@ shim works!0
 Channel.open() ok=0x1
 unauthorized Channel.send() succeeded=0x0</code></pre>
 <p>
-    The last fourteen lines are the <em>spawned child</em> — the exact same
-    program, running its own <code>_start()</code> from scratch in its own
-    freshly cloned address space, with its own distinct task index
-    (<code>0x9</code>, not the parent's <code>0x7</code>) and its own
-    independent handle table — its <code>Channel.open()</code> call gets a
-    brand-new handle, resolved through its own table, never the parent's.
-    It reaches its
-    own <code>Channel.receive()</code> too, but the single-slot mailbox is
+    Everything from the first <code>hello from a LOADED process!</code>
+    onward is the <em>spawned child</em> — the exact same program, running
+    its own <code>_start()</code> from scratch in its own freshly cloned
+    address space, with its own distinct task index (<code>0x9</code>, not
+    the parent's <code>0x7</code>) and its own independent handle table.
+    As of milestone 27 it's genuinely interleaved with the parent's own
+    remaining code, not simply "runs after" — a real preemptive scheduler
+    doesn't guarantee which one runs first, which is why the child's
+    first print lands before the parent's own <code>Process.spawn()
+    launched...</code> line in this particular capture. What doesn't vary
+    is which values each side reports. The child reaches its own
+    <code>Channel.receive()</code> too, but the single-slot mailbox is
     already empty again (the parent's own <code>receive()</code> consumed
     the one message <code>ring3go</code> sent) — so it just blocks there
     forever, never reaching its own <code>Process.spawn()</code> call.
     That's what stops this from spawning a second, third, fourth
     generation automatically: no recursion-guard flag needed, just the
     mailbox's own single-slot semantics.
+</p>
+<p>
+    <code>ProcessHandle.open(rights=0) ok=0x1</code> through
+    <code>authorized ProcessHandle.query() got taskIndex 0x9</code> are
+    milestone 27's proof, run by the <em>parent</em> right after
+    <code>Process.spawn()</code>, targeting the child it just launched.
+    Requesting zero rights still yields a real, valid handle
+    (<code>ok=0x1</code>) — a handle's existence and its rights are two
+    separate things, same as milestone 25 established for
+    <code>Channel</code>. The next line is the actual point: querying
+    through that rights-less handle is correctly rejected. A second
+    handle, this time requesting <code>RIGHT_QUERY</code>, succeeds — and
+    its query returns <code>0x9</code>, the exact taskIndex
+    <code>Process.spawn()</code> already reported two lines earlier, an
+    independent cross-check rather than a hardcoded echo. The
+    <code>handle 0 (self) -&gt; taskIndex 0x9</code> line in between is the
+    child's own pre-existing self-query (rights-granted since milestone
+    14, actually verified for the first time here) — still correct,
+    confirming the newly-real check doesn't break the one path already
+    depending on it.
 </p>
 <p>
     (The child's own <code>File.write()</code> shows the "already exists"
