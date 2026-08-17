@@ -74,9 +74,13 @@ boot/             hand-written assembly - below what asm(...) can express
   interrupts.s       ISR/IRQ entry stubs (save/restore, call into MiniC)
   linker.ld          places the multiboot header + code at the 1MB load address
 drivers/          hardware setup and I/O
-  io.mc              VGA text buffer, serial port, raw in/out port I/O
+  io.mc              VGA text buffer, serial port, raw in/out port I/O.
+                     outl/inl (32-bit) added milestone 29 for PCI config
+                     space, which is dword-addressed
   interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.mc        scancode table + the shell's line buffer
+  pci.mc             milestone 29 (Phase X's first step): PCI bus
+                     enumeration via CONFIG_ADDRESS/CONFIG_DATA, bus 0 only
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand
   frames.mc          multiboot memory map parser + physical frame allocator
@@ -413,6 +417,48 @@ int close(int fd);</code></pre>
     right before <code>int 0x80</code>.
 </p>
 
+<h2 id="pci">Hardware discovery: PCI</h2>
+<p>
+    Milestone 29 (Phase X's first step) is the first time this kernel
+    discovers its own hardware instead of trusting a fixed, hardcoded
+    I/O port — every earlier driver (VGA, serial, keyboard, PIT/PIC,
+    ATA) just assumes its device sits at a well-known legacy address.
+    That stops working the moment a device's location genuinely isn't
+    fixed, which is exactly true of a NIC — networking's real
+    prerequisite. <code>drivers/pci.mc</code> walks the legacy
+    <code>CONFIG_ADDRESS</code>/<code>CONFIG_DATA</code> mechanism
+    (I/O ports <code>0xCF8</code>/<code>0xCFC</code>, <code>drivers/
+    io.mc</code>'s new 32-bit <code>outl</code>/<code>inl</code> — PCI
+    config space is dword-addressed) across all 32 device slots on bus
+    0, checking function 0 of each and only probing functions 1–7 for
+    devices whose header-type byte marks them multi-function.
+</p>
+<p>
+    Deliberately scoped to bus 0 only — no recursion through a
+    PCI-to-PCI bridge's secondary bus, since QEMU's default machine has
+    none. A real bus walk would read a bridge's own secondary-bus-number
+    register and recurse; that's a genuine but separate extension for
+    whenever a device beyond bus 0 needs finding, not tackled here.
+    There's also no general driver-registration/probe framework yet —
+    finding a device by vendor:device ID today means a caller manually
+    scanning <code>gPciDevices[]</code>.
+</p>
+<p>
+    Verified against something this kernel had no part in choosing:
+    QEMU's own default machine model. Every device <code>pci</code>
+    finds is a real, publicly-documented vendor:device ID pair —
+    <code>0x8086:0x1237</code> (the i440FX host bridge),
+    <code>0x8086:0x7000</code>/<code>0x7010</code>/<code>0x7113</code>
+    (PIIX3 ISA bridge / IDE controller / PIIX4 ACPI bridge —
+    <code>0x7010</code> is literally the same IDE controller
+    <code>disk/ata.mc</code> already talks to by hardcoded port),
+    <code>0x1234:0x1111</code> (the Bochs/QEMU standard VGA device), and
+    <code>0x8086:0x100e</code> — a real Intel e1000 gigabit NIC, found
+    with zero extra QEMU flags, and the next Phase X milestone's target
+    device. See the <a href="examples.html">Walkthrough</a> for the real
+    captured output.
+</p>
+
 <h2 id="testing">Testing methodology</h2>
 <p>
     Every claim in this project is backed by a concrete, checkable
@@ -445,7 +491,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe/PCI enumeration.</li>
-<li><strong>No networking, no PCI enumeration, no driver framework beyond the handful of hand-rolled drivers</strong> that exist today (VGA, serial, keyboard, PIT/PIC, ATA) — a deliberately late phase, the largest remaining subsystem.</li>
+<li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework, and — the real remaining size of this phase — no NIC driver and no networking stack at all. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
 </ul>
 
 </main>

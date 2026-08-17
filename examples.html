@@ -75,6 +75,8 @@ receiver got: 0x0 value=0x0
 sent 0xc0ffee1234
 &gt; chan
 receiver got: 0x1 value=0xc0ffee1234
+&gt; pci
+pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 vendor=0x8086 device=0x7000 class=0x6 subclass=0x1 0:1.1 vendor=0x8086 device=0x7010 class=0x1 subclass=0x1 0:1.3 vendor=0x8086 device=0x7113 class=0x6 subclass=0x80 0:2.0 vendor=0x1234 device=0x1111 class=0x3 subclass=0x0 0:3.0 vendor=0x8086 device=0x100e class=0x2 subclass=0x0
 &gt; disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 &gt; diskwrite
@@ -200,6 +202,27 @@ sent ring3 spawn trigger</code></pre>
     isolated process with its own private address space) woke up on its
     own. The message genuinely crossed from one isolated address space to
     another through the channel, not shared memory.
+</p>
+
+<h2>PCI bus enumeration</h2>
+<p>
+    <code>pci</code>'s strength comes from being checkable against
+    something this kernel had no part in choosing: QEMU's own default
+    machine model. Every vendor:device pair reported is a real, publicly
+    documented ID — <code>0x8086:0x1237</code> (the i440FX host bridge),
+    <code>0x8086:0x7000</code>/<code>0x7010</code>/<code>0x7113</code>
+    (PIIX3 ISA bridge, IDE controller, and PIIX4 ACPI bridge —
+    <code>0x7010</code> is literally the same IDE controller
+    <code>disk</code>/<code>diskwrite</code> below already talk to, just
+    now independently <em>discovered</em> instead of assumed),
+    <code>0x1234:0x1111</code> (the Bochs/QEMU standard VGA device), and
+    <code>0x8086:0x100e</code> — a real Intel e1000 gigabit NIC, found
+    with zero extra QEMU flags and the target device for the next Phase X
+    milestone. Getting a wrong answer here (a garbage vendor ID, a
+    missing or extra device) would be immediately checkable against
+    public PCI ID databases — the same "a wrong answer is obviously
+    wrong" property every milestone's verification here has looked for
+    since milestone 1.
 </p>
 
 <h2>Disk &amp; filesystem</h2>

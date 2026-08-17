@@ -99,9 +99,14 @@
 <li><strong>Phase IX is now considered substantially complete.</strong> ASLR and true process sandboxing remain open, unscoped ideas for a future revisit — ideas, not commitments — but the concrete gaps this phase set out to close (capability rights on both <code>Channel</code> and <code>Process</code>, and real memory-protection hardening on the shared region including NX) are all done.</li>
 </ul>
 
-<h2>What's next after Phase IX</h2>
+<h2>Phase X: driver framework (PCI) + networking</h2>
 <ul>
-<li><strong>Phase X — a real driver framework (PCI enumeration) + networking</strong> (NIC driver, a from-scratch TCP/IP stack) — deliberately last: the largest remaining subsystem, with the fewest things depending on it.</li>
+<li><strong>29: PCI bus enumeration</strong> <span class="tag">done</span> — Phase X's first step, and the necessary prerequisite for everything else in this phase: a NIC driver can't be written against a hardcoded, assumed I/O port the way <code>disk/ata.mc</code>'s <code>0x1F0</code> was — it has to be discovered. New <code>drivers/pci.mc</code> walks the legacy <code>CONFIG_ADDRESS</code>/<code>CONFIG_DATA</code> mechanism (ports <code>0xCF8</code>/<code>0xCFC</code>, <code>drivers/io.mc</code>'s new 32-bit <code>outl</code>/<code>inl</code>) across bus 0's 32 device slots, probing functions 1–7 only for devices whose header-type byte marks them multi-function. Deliberately scoped to bus 0 only — no PCI-to-PCI bridge recursion, since QEMU's default machine has none. Verified against something this kernel had no part in choosing: every device found (<code>0x8086:0x1237</code> host bridge, <code>0x8086:0x7000</code>/<code>0x7010</code>/<code>0x7113</code> ISA/IDE/ACPI bridges, <code>0x1234:0x1111</code> Bochs VGA, <code>0x8086:0x100e</code> an Intel e1000 NIC) is a real, publicly-documented vendor:device ID pair matching QEMU's own default machine model exactly — and <code>0x7010</code> is literally the same IDE controller <code>disk/ata.mc</code> already talks to, now independently discovered rather than assumed. Finding a real e1000 NIC with zero extra QEMU flags is a useful bonus: the next Phase X milestone has a real target device already in hand. A regression pass (<code>disk</code>/<code>diskwrite</code> interleaved with <code>pci</code>, confirming the new 32-bit port-I/O globals don't corrupt the ATA driver's own shared staging globals; heap; scheduler) stayed clean. See the <a href="reference.html#pci">Architecture</a> page and the <a href="examples.html">Walkthrough</a> for the real captured output.</li>
+<li>Next: an actual e1000 NIC driver (initialize the device found here, get real packet TX/RX working) — the next real hard problem in this phase, and a large one on its own.</li>
+</ul>
+
+<h2>What's next after Phase X</h2>
+<ul>
 <li><strong>Phase XI — service architecture + a real <code>init</code></strong> — the current hardcoded shell loop migrates to an actual userspace program once processes/IPC/VFS exist to support that; async I/O as a cross-cutting pass once sync I/O works everywhere.</li>
 </ul>
 <p>
