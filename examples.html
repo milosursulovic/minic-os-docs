@@ -283,6 +283,37 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
     still succeeds, reading back the real, persisted content either way.)
 </p>
 
+<h2>A deliberate forbidden ring3 write</h2>
+<p>
+    <code>ring3fault</code> is a separate, dedicated session — deliberately
+    not run alongside anything else, since it ends by halting the kernel
+    on purpose. It sends a second trigger value on the same channel
+    <code>ring3go</code> uses, causing the boot-time ring3 process to
+    attempt a forbidden write instead of spawning a child:
+</p>
+<pre><code>&gt; ring3fault
+sent ring3 forbidden-write trigger - expect a page fault
+Channel.receive() got trigger 0x2
+attempting forbidden ring3 write to 0x100000
+page fault at 0x100000, halting</code></pre>
+<p>
+    This is milestone 26's actual proof. <code>attempting forbidden ring3
+    write to 0x100000</code> confirms the process really reached the write
+    attempt; the very next line the source would have printed on success —
+    <code>"forbidden write succeeded (BUG!) at 0x..."</code> — never
+    appears, because the CPU faulted on the write itself before that
+    syscall could even be staged. <code>page fault at 0x100000, halting</code>
+    is the kernel's existing page-fault handler independently confirming
+    the exact faulting address (read from CR2, not anything the ring3
+    process reported about itself) — <code>0x100000</code>, the kernel's
+    own multiboot load address, inside the shared region every address
+    space carries but never something this process mapped for itself.
+    Before this milestone's fix, the same command printed the "(BUG!)"
+    line and kept running, the write landing silently in live kernel
+    memory — the absence of that line, replaced by a fault at exactly the
+    address written to, is what makes this a real negative-space proof.
+</p>
+
 </main>
 
 <footer>

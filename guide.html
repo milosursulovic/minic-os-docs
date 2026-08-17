@@ -134,6 +134,7 @@
 <tr><td><code>chan</code></td><td>shows whether the boot-time demo receiver process has gotten a message yet, and what value</td></tr>
 <tr><td><code>send</code></td><td>sends a fixed demo value on that same channel — the blocked receiver wakes up on its own, from a separate isolated address space</td></tr>
 <tr><td><code>ring3go</code></td><td>sends a trigger on a <em>second</em>, dedicated channel — this one wakes the boot-time ring3 <em>process's own</em> blocking <code>Channel.receive()</code> syscall, which then goes on to call <code>Process.spawn()</code> and launch a second copy of itself (run <code>install</code> first so the file it spawns actually exists on disk)</td></tr>
+<tr><td><code>ring3fault</code></td><td>sends a <em>different</em> trigger value on that same channel — instead of spawning, the boot-time ring3 process deliberately attempts a forbidden write into the kernel's shared region and takes a real page fault (see <a href="reference.html#memory-protection">Memory protection</a>). <strong>Halts the kernel</strong> — run it in its own dedicated session, never alongside other commands</td></tr>
 </table>
 
 <h2>Raw disk I/O</h2>

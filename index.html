@@ -89,7 +89,10 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         <p>Each process gets its own PML4, cloned on spawn — two processes
         mapping the identical virtual address resolve to two genuinely
         different physical frames, confirmed with a page-table walk, not
-        just "two different numbers came back."</p>
+        just "two different numbers came back." A cloned address space's
+        copy of the shared kernel region is stripped of ring3 access too —
+        a deliberate forbidden write from ring3 takes a real page fault,
+        not a silent success.</p>
     </div>
     <div class="card">
         <h3>An NT-style object/handle model</h3>

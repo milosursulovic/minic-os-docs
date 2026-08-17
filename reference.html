@@ -113,10 +113,11 @@ shell/            the interactive shell
 <tr><td><code>0x80000000</code>+ (PDPT[2] and up)</td><td>each process's <strong>private</strong> region — not present by default in a freshly cloned address space, populated on demand only by whichever task owns that PML4. This is where a loaded ring3 process's own code/data (<code>0x80000000</code>) and user stack (<code>0x80020000</code>) live.</td></tr>
 </table>
 <div class="note">
-    The shared region (identity map + heap) is still marked
-    user-accessible in every address space today — a genuinely open
-    security gap, not an oversight; see
-    <a href="#limitations">Known limitations</a>.
+    As of milestone 26, a <em>cloned</em> (ring3-capable) address space's
+    copy of PDPT[0]/PDPT[1] has the user bit stripped — a ring3 process
+    can no longer read/write/execute this region directly, only through a
+    syscall (which raises CPL to 0 first). See
+    <a href="#memory-protection">Memory protection</a> below.
 </div>
 
 <h2 id="scheduler">Scheduler</h2>
@@ -249,6 +250,44 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     <a href="roadmap.html">Roadmap</a>.
 </div>
 
+<h2 id="memory-protection">Memory protection on the shared region</h2>
+<p>
+    Milestone 26 closed a real gap: <code>cloneAddressSpace()</code>
+    (<code>mm/paging.mc</code>) used to copy the kernel's own
+    <code>PDPT[0]</code>/<code>PDPT[1]</code> entries into every new
+    address space unchanged, including the user (<code>0x04</code>) bit —
+    since x86 paging ANDs that bit across every level from PML4 down to
+    the leaf, a supervisor-only leaf mapping underneath didn't matter if
+    an intermediate PDPT entry above it was user-accessible. Tracing every
+    actual leaf-level <code>mapPage</code>/<code>mapPageIn</code> call
+    site first showed the real, exploitable surface was narrower than it
+    looked — the heap and the <code>map</code> demo command already
+    passed leaf flags without the user bit, so the actual gap was
+    specifically <code>boot.s</code>'s static 1GB identity map's 2MB
+    huge-page leaves (PDPT index 0).
+</p>
+<p>
+    The fix strips the user bit from <em>the copy</em>
+    <code>cloneAddressSpace()</code> makes — <code>boot.s</code>'s own
+    tables and the kernel's original address space (<code>gPML4Phys</code>,
+    used directly by plain kernel tasks that never enter ring3) are
+    untouched. Every legitimate ring3 interaction with this region already
+    goes through a syscall, which raises CPL to 0 before touching kernel
+    memory or the heap — nothing in this kernel needed direct ring3 access
+    to begin with.
+</p>
+<p>
+    Verified with a genuine negative-space proof, not just a topology
+    change: the shell's <code>ring3fault</code> command sends a second
+    trigger value on the existing ring3-demo channel, causing the
+    boot-time process to deliberately attempt a forbidden write to
+    <code>0x100000</code> (the kernel's own multiboot load address —
+    present, and never mapped by that process itself). The existing
+    page-fault handler reports the exact faulting address and halts,
+    before the process's own "it worked" print can ever run. See the
+    <a href="examples.html">Walkthrough</a> for the real captured output.
+</p>
+
 <h2 id="native-api">The native API</h2>
 <p>
     Ring3 processes are real, <code>minicc</code>-compiled MiniC programs
@@ -345,10 +384,9 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 
 <h2 id="limitations">Known limitations (on purpose, for now)</h2>
 <ul>
-<li><strong>The shared identity-map/heap region is still fully user-accessible</strong> in every address space — real isolation only covers each process's <em>private</em> region (<code>vaddr &gt;= 0x80000000</code>). A real memory-protection pass over the shared region is planned once capability/security work is underway.</li>
+<li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>Channel</code> handles are real, rights-checked capabilities as of milestone 25 (see <a href="#capabilities">Capabilities &amp; rights</a>), but that's the only object type covered so far — <code>Process</code> handles don't have a meaningfully differentiated rights set to enforce yet.</li>
 <li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
-<li><strong>Channels aren't wrapped as kernel objects/handles</strong> — they're a plain integer index, unlike processes.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe/PCI enumeration.</li>
