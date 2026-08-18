@@ -81,6 +81,8 @@ pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 
 e1000 mac=52:54:0:12:34:56 linkUp=0x1
 &gt; arp
 resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
+&gt; ping
+ping gateway ok=0x1 elapsedTicks=0x64
 &gt; disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 &gt; diskwrite
@@ -285,6 +287,38 @@ sent ring3 spawn trigger</code></pre>
     own real tick-bounded timeout expires, rather than hanging forever or
     returning garbage — a real, honest failure result for a real failure
     case.
+</p>
+
+<h2>A real IP layer</h2>
+<p>
+    <code>ping</code> is milestone 33's proof — a genuine ICMP echo round
+    trip through the full stack built so far: ARP resolution, real IPv4
+    header construction, a real checksum, and a real Ethernet send/
+    receive, all in one command. <code>ok=0x1</code> means
+    <code>net/icmp.mc</code>'s <code>icmpPing()</code> got back a reply
+    that matched on <em>every</em> real, independently meaningful field —
+    the right EtherType, the right IP protocol number, the right source
+    IP, the right ICMP type (echo reply, not some other ICMP message),
+    and the exact identifier/sequence number this specific request sent —
+    not just "some ICMP traffic arrived."
+</p>
+<p>
+    A wrong IP header (a bad checksum, a malformed field) would most
+    likely have gotten the packet silently dropped by QEMU's real
+    host-level network stack rather than answered at all, so the reply
+    arriving at all is itself strong indirect evidence the header was
+    built correctly — the same "external validation beats
+    self-validation" property every proof in this networking phase has
+    looked for. <code>elapsedTicks=0x64</code> matches the same real,
+    non-trivial round-trip time <code>arp</code> measured moments
+    earlier — consistent, not coincidental, real network latency.
+</p>
+<p>
+    This is also the first milestone in this whole project to give the
+    kernel a real, explicit "my IP address" (<code>net/ip.mc</code>'s
+    <code>gMyIp</code>) — previously a bare literal duplicated inside
+    <code>arp.mc</code>'s own request-building code, now one shared,
+    named value both files use.
 </p>
 
 <h2>Disk &amp; filesystem</h2>

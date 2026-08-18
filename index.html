@@ -122,7 +122,7 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         backends through the identical function call.</p>
     </div>
     <div class="card">
-        <h3>Real PCI hardware discovery, a NIC driver, and ARP</h3>
+        <h3>Real PCI discovery, a NIC driver, ARP, and IP</h3>
         <p>Walks the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism to
         enumerate real hardware instead of trusting a hardcoded I/O port
         — every device found checks out against QEMU's own default
@@ -132,8 +132,9 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         descriptor rings. A real ARP resolver sits on top — a genuine
         cache (a second resolve of the same address returns instantly,
         checkable by real elapsed ticks) that works for any target
-        address, verified with a genuine external round trip through
-        QEMU's own network backend, not a loopback.</p>
+        address. A real IPv4 layer sits above that, verified with a
+        genuine ICMP echo (ping) round trip through QEMU's own network
+        backend — not a loopback, not self-validation.</p>
     </div>
     <div class="card">
         <h3>Compiled MiniC running in ring 3</h3>

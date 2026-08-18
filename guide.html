@@ -142,14 +142,16 @@
 <p>
     Phase X's own subsystems — the first time this kernel discovers its
     own hardware instead of trusting a fixed, hardcoded I/O port, and
-    (as of milestones 30-31) a real driver for the NIC that discovery
-    finds, moving real packets through real TX/RX descriptor rings.
+    (as of milestones 30-33) a real driver for the NIC that discovery
+    finds, moving real packets through real TX/RX descriptor rings, with
+    a real ARP resolver and IPv4 layer on top.
 </p>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
 <tr><td><code>pci</code></td><td>walks the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism across bus 0's 32 device slots and prints every real device found — vendor/device ID, class/subclass — independently checkable against QEMU's own default machine model (see <a href="reference.html#pci">Hardware discovery: PCI</a>)</td></tr>
 <tr><td><code>nic</code></td><td>enables the e1000 NIC over PCI, maps its MMIO register file, and prints its real MAC address and link-up status — read straight from hardware, not fabricated (see <a href="reference.html#e1000">The e1000 NIC driver</a>)</td></tr>
 <tr><td><code>arp</code></td><td>exercises the real ARP resolver (<code>arpResolve()</code>) in four checks: resolves QEMU's default gateway (real external round trip), resolves it again (instant cache hit — zero elapsed ticks), resolves a second real address (QEMU's DNS proxy), and resolves an unreachable address (correctly fails after a real timeout) (see <a href="reference.html#arp">A real ARP resolver</a>)</td></tr>
+<tr><td><code>ping</code></td><td>sends a real ICMP echo request to QEMU's default gateway (resolving its MAC via the real ARP resolver first) and verifies a genuine, correctly-matching reply — real IPv4 header, real checksum, real external round trip (see <a href="reference.html#ip">A real IP layer</a>)</td></tr>
 </table>
 
 <h2>Raw disk I/O</h2>
