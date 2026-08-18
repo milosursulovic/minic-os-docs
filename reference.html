@@ -81,25 +81,25 @@ drivers/          hardware setup and I/O
   keyboard.mc        scancode table + the shell's line buffer
   pci.mc             milestone 29 (Phase X's first step): PCI bus
                      enumeration via CONFIG_ADDRESS/CONFIG_DATA, bus 0 only.
-                     Milestone 30: pciConfigWriteDword() (first PCI config
-                     WRITE) and pciReadBar0()
+                     Milestone 30: pci_config_write_dword() (first PCI config
+                     WRITE) and pci_read_bar0()
 net/              networking (milestone 30 onward)
   e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
                      mapping, real MAC/link-status readback. Milestone
                      31: real TX/RX descriptor rings, a genuine packet
                      round trip verified via a hand-crafted ARP request
   arp.mc             milestone 32: a real ARP resolver - a genuine
-                     cache, arpResolve() for any target address, client
+                     cache, arp_resolve() for any target address, client
                      (resolver) only, no responder
   ip.mc              milestone 33: real IPv4 header build + the RFC 791
-                     checksum, and gMyIp - this kernel's own first
+                     checksum, and g_my_ip - this kernel's own first
                      concept of "my IP address" (still static, no DHCP)
-  icmp.mc            milestone 33: icmpPing() - a real echo request/
+  icmp.mc            milestone 33: icmp_ping() - a real echo request/
                      reply round trip, the verification vehicle for the
                      IP layer the same way ARP was for TX/RX
-  udp.mc             milestone 34: real UDP - udpChecksum() (the real
-                     pseudo-header algorithm), udpSend()/udpReceive()
-  dns.mc             milestone 34: dnsQuery() - a minimal, hand-crafted
+  udp.mc             milestone 34: real UDP - udp_checksum() (the real
+                     pseudo-header algorithm), udp_send()/udp_receive()
+  dns.mc             milestone 34: dns_query() - a minimal, hand-crafted
                      DNS query, the verification vehicle for UDP the
                      same way ICMP's ping was for IP. Not a real DNS
                      client
@@ -108,11 +108,11 @@ mm/               memory management
   frames.mc          multiboot memory map parser + physical frame allocator
   paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
                      spaces, per-task TSS.RSP0
-lib/              no-libc helpers (streq/strlen/parseHex/printHex/...)
+lib/              no-libc helpers (streq/strlen/parse_hex/print_hex/...)
 isr/              interrupt dispatch (interrupt_handler)
 sched/            preemptive task scheduler
   switch.s           hand-written context switch - below what asm(...) can express
-  task.mc            Task table, createTask/yield/sleep/channelReceive
+  task.mc            Task table, create_task/yield/sleep/channel_receive
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry - below what asm(...) can express
   syscall.mc         the syscall dispatcher (see the ABI table below)
@@ -149,7 +149,7 @@ shell/            the interactive shell
 <h2 id="scheduler">Scheduler</h2>
 <p>
     A fixed table of tasks, each with its own <code>kalloc</code>'d stack.
-    <code>createTask()</code> hand-builds a new task's initial stack to
+    <code>create_task()</code> hand-builds a new task's initial stack to
     look exactly like what the hand-written <code>switch_context()</code>
     would have left behind, with the task's entry point as a fake "return
     address" — the first switch into a never-run task lands there via an
@@ -175,7 +175,7 @@ shell/            the interactive shell
 
 <h2 id="process-model">Process model &amp; isolation</h2>
 <p>
-    Real per-process address-space isolation: <code>cloneAddressSpace()</code>
+    Real per-process address-space isolation: <code>clone_address_space()</code>
     builds a fresh PML4 whose entry 0 points at a fresh PDPT that shares
     PDPT[0]/PDPT[1] (identity map + heap) with the kernel's own PDPT —
     literally the same physical sub-tables, so kernel code/stack/heap stay
@@ -183,20 +183,20 @@ shell/            the interactive shell
     not-present, private to whichever task gets that PML4.
 </p>
 <p>
-    <code>spawnProcess(imageStart, imageEnd, loadVaddr, stackVaddr)</code>
+    <code>spawn_process(image_start, image_end, load_vaddr, stack_vaddr)</code>
     is the real loader: clones a fresh address space, maps and copies a
     byte range into it page by page, maps a user stack, then creates a
     scheduler task whose kernel-mode entry does exactly one thing — enter
     ring3 at the loaded address via a hand-written fake-<code>iretq</code>-frame
     trick. From then on the task only ever runs in ring3, preemptible by
-    the timer like any other task. <code>spawnProcessFromPath(path, ...)</code>
+    the timer like any other task. <code>spawn_process_from_path(path, ...)</code>
     is the same loader fed from a real file read through the VFS instead
     of a pointer range.
 </p>
 <p>
-    A kernel-wide <code>KernelObject</code> table plus a <em>separate</em>
+    A kernel-wide <code>kernel_object</code> table plus a <em>separate</em>
     per-process handle table give ring3 code a small integer instead of a
-    raw kernel pointer — <code>resolveHandle(processIndex, handle)</code>
+    raw kernel pointer — <code>resolve_handle(process_index, handle)</code>
     is the one place that integer becomes a real object index, bounds-
     checked and existence-checked, never trusted directly. Every process
     gets a handle to itself for free, guaranteed to land in the
@@ -206,11 +206,11 @@ shell/            the interactive shell
 
 <h2 id="ipc">IPC (channels)</h2>
 <p>
-    A <code>Channel</code> is a single-slot mailbox (one <code>u64</code>
-    message). <code>channelSend()</code> is non-blocking — fails outright
+    A <code>channel</code> is a single-slot mailbox (one <code>u64</code>
+    message). <code>channel_send()</code> is non-blocking — fails outright
     if the mailbox is already full, rather than overwriting an unread
     message or blocking the sender too (a real, separate hard problem, not
-    tackled yet). <code>channelReceive()</code> is the one genuinely new
+    tackled yet). <code>channel_receive()</code> is the one genuinely new
     scheduler mechanism: it blocks the calling task exactly the way
     <code>sleep()</code> already does, just with a channel index set
     instead of a wake tick — the blocked-task scan gained a second wake
@@ -229,13 +229,13 @@ shell/            the interactive shell
 <tr><th>#</th><th>Name</th><th>Arguments</th><th>Notes</th></tr>
 <tr><td>1</td><td>print</td><td>message ptr, hex value</td><td>prints the string then the value in hex</td></tr>
 <tr><td>3</td><td>query handle</td><td>handle</td><td>resolves a handle in the caller's own table, returns ground-truth data (e.g. a process's task index) or a <code>-1</code> sentinel; requires <code>RIGHT_QUERY</code> as of milestone 27</td></tr>
-<tr><td>4</td><td>vfsRead</td><td>path ptr, buffer ptr, max length</td><td>backs the native <code>File.read()</code></td></tr>
-<tr><td>5</td><td>vfsWrite</td><td>path ptr, buffer ptr, length</td><td>backs the native <code>File.write()</code></td></tr>
-<tr><td>6</td><td>spawn</td><td>path ptr, loadVaddr, stackVaddr</td><td>backs the native <code>Process.spawn()</code> — reuses <code>spawnProcessFromPath()</code> unchanged</td></tr>
-<tr><td>7</td><td>channelSend</td><td>channel handle, value</td><td>backs the native <code>Channel.send()</code>; resolves the handle in the caller's own table and requires <code>RIGHT_SEND</code></td></tr>
-<tr><td>8</td><td>channelReceive</td><td>channel handle</td><td><strong>blocking</strong> — backs <code>Channel.receive()</code>; the first blocking syscall this kernel has; requires <code>RIGHT_RECEIVE</code></td></tr>
-<tr><td>9</td><td>openChannel</td><td>channel index</td><td>backs <code>Channel.open()</code> — the one place a channel index becomes a real handle; always grants <code>RIGHT_RECEIVE</code> only, never <code>RIGHT_SEND</code></td></tr>
-<tr><td>10</td><td>openProcess</td><td>task index, requested rights</td><td>backs <code>ProcessHandle.open()</code> — mints a handle to <em>any</em> process (not just the caller), granting <code>requested &amp; RIGHT_QUERY</code> (the only grantable Process right today)</td></tr>
+<tr><td>4</td><td>vfs_read</td><td>path ptr, buffer ptr, max length</td><td>backs the native <code>file.read()</code></td></tr>
+<tr><td>5</td><td>vfs_write</td><td>path ptr, buffer ptr, length</td><td>backs the native <code>file.write()</code></td></tr>
+<tr><td>6</td><td>spawn</td><td>path ptr, load_vaddr, stack_vaddr</td><td>backs the native <code>process.spawn()</code> — reuses <code>spawn_process_from_path()</code> unchanged</td></tr>
+<tr><td>7</td><td>channel_send</td><td>channel handle, value</td><td>backs the native <code>channel.send()</code>; resolves the handle in the caller's own table and requires <code>RIGHT_SEND</code></td></tr>
+<tr><td>8</td><td>channel_receive</td><td>channel handle</td><td><strong>blocking</strong> — backs <code>channel.receive()</code>; the first blocking syscall this kernel has; requires <code>RIGHT_RECEIVE</code></td></tr>
+<tr><td>9</td><td>open_channel</td><td>channel index</td><td>backs <code>channel.open()</code> — the one place a channel index becomes a real handle; always grants <code>RIGHT_RECEIVE</code> only, never <code>RIGHT_SEND</code></td></tr>
+<tr><td>10</td><td>open_process</td><td>task index, requested rights</td><td>backs <code>process_handle.open()</code> — mints a handle to <em>any</em> process (not just the caller), granting <code>requested &amp; RIGHT_QUERY</code> (the only grantable Process right today)</td></tr>
 </table>
 <div class="note">
     A syscall runs with the calling process's own address space still
@@ -243,7 +243,7 @@ shell/            the interactive shell
     dereferencing a ring3-supplied pointer needs no special mechanism —
     but nothing here validates that a pointer argument actually belongs
     to the calling process (handle arguments <em>are</em> now
-    rights-checked for both <code>Channel</code> and <code>Process</code>,
+    rights-checked for both <code>channel</code> and <code>process</code>,
     as of milestones 25 and 27 — see
     <a href="#capabilities">Capabilities</a> below). See
     <a href="#limitations">Known limitations</a> for what's still open.
@@ -251,33 +251,33 @@ shell/            the interactive shell
 
 <h2 id="capabilities">Capabilities &amp; rights</h2>
 <p>
-    Every <code>Handle</code> carries a <code>rights</code> bitmask, set
+    Every <code>handle</code> carries a <code>rights</code> bitmask, set
     once when the handle is granted and never widened afterward:
 </p>
 <pre><code>const int RIGHT_QUERY = 1;
 const int RIGHT_SEND = 2;
 const int RIGHT_RECEIVE = 4;</code></pre>
 <p>
-    <code>openChannel</code> (syscall 9) is the one place a ring3 process
+    <code>open_channel</code> (syscall 9) is the one place a ring3 process
     can turn a raw channel index into a handle — and the one place the
     kernel decides policy: it always grants <code>RIGHT_RECEIVE</code>
     only, regardless of what the caller might want, since nothing in
     this kernel today needs a ring3-initiated send (the shell always
-    sends directly, in kernel mode). <code>channelSend</code>/
-    <code>channelReceive</code> check the calling handle's rights before
+    sends directly, in kernel mode). <code>channel_send</code>/
+    <code>channel_receive</code> check the calling handle's rights before
     ever touching the underlying channel — a handle obtained through
-    <code>openChannel</code> genuinely cannot be used to send, not just
+    <code>open_channel</code> genuinely cannot be used to send, not just
     "isn't expected to." See the <a href="examples.html">Walkthrough</a>
     for a real rejected send attempt.
 </p>
 <p>
-    Milestone 27 extended real enforcement to <code>Process</code>
+    Milestone 27 extended real enforcement to <code>process</code>
     handles too. <code>RIGHT_QUERY</code> had existed since milestone 25
     and was already granted to every process's own self-handle (since
     milestone 14) — but syscall 3 never actually checked it, resolving
     any valid <code>OBJ_PROCESS</code> handle regardless of rights. Now it
     does, using the same inline check syscalls 7/8/9 use.
-    <code>openProcess</code> (syscall 10) is the first real
+    <code>open_process</code> (syscall 10) is the first real
     <strong>cross-process</strong> capability — given another task's
     index, it mints a handle to that process in the caller's own table,
     granting the intersection of a caller-<em>requested</em> rights
@@ -286,20 +286,20 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     which is what the negative-space proof actually exercises: a handle
     opened with no rights genuinely fails to query, while a second handle
     to the same process opened with <code>RIGHT_QUERY</code> succeeds and
-    reports the correct taskIndex. See the
+    reports the correct task_index. See the
     <a href="examples.html">Walkthrough</a> for the real captured proof.
 </p>
 
 <h2 id="memory-protection">Memory protection: the shared region, and NX</h2>
 <p>
-    Milestone 26 closed a real gap: <code>cloneAddressSpace()</code>
+    Milestone 26 closed a real gap: <code>clone_address_space()</code>
     (<code>mm/paging.mc</code>) used to copy the kernel's own
     <code>PDPT[0]</code>/<code>PDPT[1]</code> entries into every new
     address space unchanged, including the user (<code>0x04</code>) bit —
     since x86 paging ANDs that bit across every level from PML4 down to
     the leaf, a supervisor-only leaf mapping underneath didn't matter if
     an intermediate PDPT entry above it was user-accessible. Tracing every
-    actual leaf-level <code>mapPage</code>/<code>mapPageIn</code> call
+    actual leaf-level <code>map_page</code>/<code>map_page_in</code> call
     site first showed the real, exploitable surface was narrower than it
     looked — the heap and the <code>map</code> demo command already
     passed leaf flags without the user bit, so the actual gap was
@@ -308,8 +308,8 @@ const int RIGHT_RECEIVE = 4;</code></pre>
 </p>
 <p>
     The fix strips the user bit from <em>the copy</em>
-    <code>cloneAddressSpace()</code> makes — <code>boot.s</code>'s own
-    tables and the kernel's original address space (<code>gPML4Phys</code>,
+    <code>clone_address_space()</code> makes — <code>boot.s</code>'s own
+    tables and the kernel's original address space (<code>g_pml4_phys</code>,
     used directly by plain kernel tasks that never enter ring3) are
     untouched. Every legitimate ring3 interaction with this region already
     goes through a syscall, which raises CPL to 0 before touching kernel
@@ -368,29 +368,29 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     <code>obj.method()</code> syntax wrapping the syscalls above — not raw
     syscall numbers.
 </p>
-<div class="code-label">File — whole-file, path-based (no open/close/seek at the kernel level)</div>
-<pre><code>struct File { char* path; }
+<div class="code-label">file — whole-file, path-based (no open/close/seek at the kernel level)</div>
+<pre><code>struct file { char* path; }
 
-u64 File.write(File* self, char* buf, u64 len);
-u64 File.read(File* self, char* buf, u64 maxLen);</code></pre>
-<div class="code-label">Channel</div>
-<pre><code>struct Channel { int handle; }
+u64 file.write(file* self, char* buf, u64 len);
+u64 file.read(file* self, char* buf, u64 max_len);</code></pre>
+<div class="code-label">channel</div>
+<pre><code>struct channel { int handle; }
 
-bool Channel.open(Channel* self, int channelIndex);   // grants RIGHT_RECEIVE only
-bool Channel.send(Channel* self, u64 value);           // fails without RIGHT_SEND
-u64  Channel.receive(Channel* self);   // blocks; fails without RIGHT_RECEIVE</code></pre>
-<div class="code-label">Process — path-based, spawn only</div>
-<pre><code>struct Process { char* path; }
+bool channel.open(channel* self, int channel_index);   // grants RIGHT_RECEIVE only
+bool channel.send(channel* self, u64 value);           // fails without RIGHT_SEND
+u64  channel.receive(channel* self);   // blocks; fails without RIGHT_RECEIVE</code></pre>
+<div class="code-label">process — path-based, spawn only</div>
+<pre><code>struct process { char* path; }
 
-u64 Process.spawn(Process* self, u64 loadVaddr, u64 stackVaddr);
+u64 process.spawn(process* self, u64 load_vaddr, u64 stack_vaddr);
 // returns the new process's task index, or -1</code></pre>
-<div class="code-label">ProcessHandle — handle-based, query an already-running task (milestone 27)</div>
-<pre><code>struct ProcessHandle { int handle; }
+<div class="code-label">process_handle — handle-based, query an already-running task (milestone 27)</div>
+<pre><code>struct process_handle { int handle; }
 
-bool ProcessHandle.open(ProcessHandle* self, int taskIndex, int requestedRights);
-// grants requestedRights &amp; RIGHT_QUERY - the only right that's ever grantable
-u64  ProcessHandle.query(ProcessHandle* self);
-// fails without RIGHT_QUERY; else returns the target's real taskIndex</code></pre>
+bool process_handle.open(process_handle* self, int task_index, int requested_rights);
+// grants requested_rights &amp; RIGHT_QUERY - the only right that's ever grantable
+u64  process_handle.query(process_handle* self);
+// fails without RIGHT_QUERY; else returns the target's real task_index</code></pre>
 
 <h2 id="posix-shim">The POSIX-shaped shim</h2>
 <p>
@@ -398,11 +398,11 @@ u64  ProcessHandle.query(ProcessHandle* self);
     — plain free functions, deliberately not methods, matching POSIX's
     real API shape rather than extending the native OO-style one.
     Implemented <strong>entirely in ring3 MiniC</strong>, with no new
-    syscalls and no kernel changes: since <code>File</code> is whole-file
+    syscalls and no kernel changes: since <code>file</code> is whole-file
     only, <code>open()</code> loads (or starts) a per-fd in-memory buffer
     once, <code>read()</code>/<code>write()</code> serve out of it while
     advancing a position cursor, and <code>close()</code> flushes a
-    written buffer through <code>File.write()</code> in one shot.
+    written buffer through <code>file.write()</code> in one shot.
 </p>
 <pre><code>int open(char* path, int mode);   // 0 = read, 1 = write (create)
 int read(int fd, char* buf, int len);
@@ -433,7 +433,7 @@ int close(int fd);</code></pre>
 <p>
     <code>asm(...)</code> has no operand binding, so a syscall's arguments
     can't be received in a register and used immediately — a small
-    <code>doSyscall(num, arg1, arg2, arg3)</code> helper stages them into
+    <code>do_syscall(num, arg1, arg2, arg3)</code> helper stages them into
     globals first, then one <code>asm(...)</code> block loads them into
     <code>rax</code>/<code>rdi</code>/<code>rsi</code>/<code>rdx</code>
     right before <code>int 0x80</code>.
@@ -463,7 +463,7 @@ int close(int fd);</code></pre>
     whenever a device beyond bus 0 needs finding, not tackled here.
     There's also no general driver-registration/probe framework yet —
     finding a device by vendor:device ID today means a caller manually
-    scanning <code>gPciDevices[]</code>.
+    scanning <code>g_pci_devices[]</code>.
 </p>
 <p>
     Verified against something this kernel had no part in choosing:
@@ -496,12 +496,12 @@ int close(int fd);</code></pre>
     register file isn't reached through port I/O — it's
     <strong>memory-mapped</strong> (MMIO). <code>net/e1000.mc</code>
     enables the device over PCI (<code>drivers/pci.mc</code>'s new
-    <code>pciConfigWriteDword()</code> — this kernel's first PCI config
+    <code>pci_config_write_dword()</code> — this kernel's first PCI config
     space <em>write</em>, every earlier use was read-only — sets Memory
     Space + Bus Master in the command register), reads BAR0
-    (<code>pciReadBar0()</code>) to find the device's real physical MMIO
+    (<code>pci_read_bar0()</code>) to find the device's real physical MMIO
     base, and maps 8 pages of it into the kernel's own address space via
-    <code>mm/paging.mc</code>'s ordinary <code>mapPage()</code> — the
+    <code>mm/paging.mc</code>'s ordinary <code>map_page()</code> — the
     first time this kernel has mapped device registers rather than RAM,
     though the mapping mechanism itself doesn't distinguish the two.
 </p>
@@ -543,13 +543,13 @@ int close(int fd);</code></pre>
     device DMAs to/from those buffers itself once bus-mastering is
     enabled (already turned on in milestone 30). <code>packed struct
     TxDescriptor</code>/<code>RxDescriptor</code> match the hardware's
-    own 16-byte layout exactly. <code>e1000Send()</code> copies data into
+    own 16-byte layout exactly. <code>e1000_send()</code> copies data into
     a buffer, hands a descriptor to the hardware, and polls the
     descriptor's own DD (descriptor done) status bit — the hardware's own
     confirmation it genuinely completed the transmission, the same
     bounded-poll, fail-clean discipline <code>disk/ata.mc</code>'s
-    <code>ataWaitReady</code>/<code>ataWaitDrq</code> already established.
-    <code>e1000Receive()</code> is the RX-side equivalent.
+    <code>ata_wait_ready</code>/<code>ata_wait_drq</code> already established.
+    <code>e1000_receive()</code> is the RX-side equivalent.
 </p>
 <p>
     Deliberately <strong>not</strong> a real ARP subsystem — no address
@@ -568,7 +568,7 @@ int close(int fd);</code></pre>
     spin loop doesn't reliably correspond to any particular amount of
     real wall-clock time, and a genuine external SLIRP round trip needs
     real time to happen. Fixed by polling against <code>isr/isr.mc</code>'s
-    own <code>gTickCount</code> instead of a raw iteration count — the
+    own <code>g_tick_count</code> instead of a raw iteration count — the
     same underlying lesson this project's QEMU/TCG timer-rate gotcha
     already taught, applied to a new context.
 </p>
@@ -576,7 +576,7 @@ int close(int fd);</code></pre>
     Verified with the strongest proof this driver has produced yet: TX
     confirmed by the hardware's own descriptor-done bit, and RX confirmed
     by a genuine reply from QEMU's real, external network stack.
-    <code>from=52:55:0a:00:02:02</code>/<code>senderIp=10.0.2.2</code> are
+    <code>from=52:55:0a:00:02:02</code>/<code>sender_ip=10.0.2.2</code> are
     QEMU's own documented default gateway MAC/IP — not anything this
     kernel could have fabricated. See the
     <a href="examples.html">Walkthrough</a> for the real captured output.
@@ -588,18 +588,18 @@ int close(int fd);</code></pre>
     request/reply with a genuine resolver, built directly on the proven
     TX/RX plumbing rather than starting over. <code>net/arp.mc</code>
     keeps a fixed-size cache (<code>ArpEntry[8]</code>) and exposes one
-    real entry point, <code>arpResolve(ip, macOut)</code>: check the
+    real entry point, <code>arp_resolve(ip, mac_out)</code>: check the
     cache first; only on a miss, send a real request and poll for a
     genuinely matching reply (right EtherType, right opcode, right
     sender IP — anything else that arrives is ignored, not mistaken for
-    the answer) against a real <code>gTickCount</code>-bounded timeout,
+    the answer) against a real <code>g_tick_count</code>-bounded timeout,
     the same lesson milestone 31 already learned about spin counts not
     reliably corresponding to real time.
 </p>
 <p>
     Deliberately scoped as a <strong>client (resolver) only</strong>, not
     a responder — this kernel's own IP address (<code>net/ip.mc</code>'s
-    <code>gMyIp</code>, milestone 33) is a fixed, static assumption, not
+    <code>g_my_ip</code>, milestone 33) is a fixed, static assumption, not
     real DHCP-negotiated configuration, so answering "who has &lt;our
     address&gt;" for an address nothing actually negotiated doesn't mean
     much yet. The cache also has no eviction or TTL — a fixed-size table
@@ -631,11 +631,11 @@ int close(int fd);</code></pre>
     independently meaningful response.
 </p>
 <p>
-    <code>net/ip.mc</code> holds <code>ipChecksum()</code> (the real RFC
+    <code>net/ip.mc</code> holds <code>ip_checksum()</code> (the real RFC
     791 one's-complement checksum — sum every 16-bit word, fold any
     carry back in, take the complement; the identical algorithm also
-    covers ICMP) and <code>ipBuildHeader()</code> (a real 20-byte,
-    no-options IPv4 header). It also holds <code>gMyIp</code> — this
+    covers ICMP) and <code>ip_build_header()</code> (a real 20-byte,
+    no-options IPv4 header). It also holds <code>g_my_ip</code> — this
     kernel's own first real, named concept of "my IP address."
     Previously a bare literal duplicated inside <code>net/arp.mc</code>'s
     own request-building code, it's now one shared value both files use
@@ -644,17 +644,17 @@ int close(int fd);</code></pre>
     configuration; see <a href="#limitations">Known limitations</a>).
 </p>
 <p>
-    <code>net/icmp.mc</code>'s <code>icmpPing()</code> resolves the
-    target's MAC via milestone 32's real <code>arpResolve()</code> first
+    <code>net/icmp.mc</code>'s <code>icmp_ping()</code> resolves the
+    target's MAC via milestone 32's real <code>arp_resolve()</code> first
     (a cache hit costs nothing here), builds a real Ethernet+IPv4+ICMP
-    echo request, sends it, and polls — real <code>gTickCount</code>-
+    echo request, sends it, and polls — real <code>g_tick_count</code>-
     bounded, milestone 31/32's already-learned timing lesson — for a
     reply matching on <em>every</em> real field: EtherType, IP protocol,
     source IP, ICMP type, and the exact identifier/sequence number this
     specific request sent, not just "something ICMP arrived."
 </p>
 <p>
-    Verified in QEMU: <code>ping gateway ok=0x1 elapsedTicks=0x64</code>
+    Verified in QEMU: <code>ping gateway ok=0x1 elapsed_ticks=0x64</code>
     — a genuine reply from QEMU's real network stack, at the same
     non-trivial round-trip time <code>arp</code> already measured. A
     wrong IP header (a bad checksum, a malformed field) would most likely
@@ -676,20 +676,20 @@ int close(int fd);</code></pre>
     separate hard problem, left for a later milestone.
 </p>
 <p>
-    <code>net/udp.mc</code>'s <code>udpChecksum()</code> covers a
+    <code>net/udp.mc</code>'s <code>udp_checksum()</code> covers a
     12-byte "pseudo-header" (source IP, dest IP, a zero byte, the
     protocol number, and the UDP length) plus the real UDP header and
     payload — binding the checksum to the addresses it's actually being
     delivered between, unlike IP's own header checksum, which covers
     only the 20 header bytes. It reuses <code>ip.mc</code>'s
-    <code>ipChecksum()</code> algorithm unchanged by assembling the
+    <code>ip_checksum()</code> algorithm unchanged by assembling the
     pseudo-header and message into one scratch buffer first.
-    <code>udpSend()</code>/<code>udpReceive()</code> follow the exact
-    same resolve-then-send-then-poll shape <code>icmpPing()</code>
+    <code>udp_send()</code>/<code>udp_receive()</code> follow the exact
+    same resolve-then-send-then-poll shape <code>icmp_ping()</code>
     already established.
 </p>
 <p>
-    <code>net/dns.mc</code>'s <code>dnsQuery()</code> is the real
+    <code>net/dns.mc</code>'s <code>dns_query()</code> is the real
     external verification vehicle — deliberately <strong>not</strong> a
     real DNS client (no response caching, no compression-pointer
     decoding, no record types beyond A), the same "one hardcoded
@@ -702,9 +702,9 @@ int close(int fd);</code></pre>
     query to a real upstream resolver and got a real answer back.
 </p>
 <p>
-    Verified in QEMU: <code>dns query ok=0x1 elapsedTicks=0x74</code> —
+    Verified in QEMU: <code>dns query ok=0x1 elapsed_ticks=0x74</code> —
     noticeably higher than <code>ping</code>'s own
-    <code>elapsedTicks=0x64</code>, a real, sensible detail: DNS
+    <code>elapsed_ticks=0x64</code>, a real, sensible detail: DNS
     resolution genuinely takes one more hop than ICMP echo (SLIRP
     forwards the query out and waits for a real reply, rather than
     answering directly the way it does for ping) — exactly the kind of
@@ -739,14 +739,14 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <h2 id="limitations">Known limitations (on purpose, for now)</h2>
 <ul>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
-<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>Channel</code> (milestone 25) and <code>Process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>Process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
+<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>channel</code> (milestone 25) and <code>process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
 <li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
 <li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
 <li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
-<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arpResolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>gMyIp</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. No TCP — a substantially bigger, genuinely separate hard problem (real connection state machine, sequence numbers, retransmission), still fully ahead. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.mc</code>'s <code>dnsQuery()</code> is deliberately not a real DNS client — no caching, no compression-pointer decoding, no record types beyond A — it exists purely as an external test vehicle for UDP. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.mc</code> already established.</li>
+<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arp_resolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. No TCP — a substantially bigger, genuinely separate hard problem (real connection state machine, sequence numbers, retransmission), still fully ahead. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.mc</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no compression-pointer decoding, no record types beyond A — it exists purely as an external test vehicle for UDP. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.mc</code> already established.</li>
 </ul>
 
 </main>

@@ -38,7 +38,7 @@
 hello from a LOADED process! 0xc0ffee
 interrupts live
 hello from a LOADED process! 0xc0ffee
-handle 0 (self) -&gt; taskIndex 0x7
+handle 0 (self) -&gt; task_index 0x7
 handle 99 (invalid) -&gt; 0xffffffffffffffff
 File.write() wrote 0x36
 File.read() got back 0x36
@@ -64,11 +64,11 @@ mapped 0x40000000 -&gt; 0x422000, wrote/read 0xcafebabe
 &gt; tasks
 task1: 0x1dc3 task2: 0x1dc4 task3: 0x2a38d9720 task4: 0x131 ticks: 0x3b8c
 &gt; procs
-procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
+proc_a: 0xaaaaaaaa @phys 0x426000 proc_b: 0xbbbbbbbb @phys 0x429000
 &gt; ps
 processes: 0x1 proc0 task=0x7 cr3=0x426000
 &gt; objs
-objects: 0x2 obj0 type=0x1 dataIndex=0x0
+objects: 0x2 obj0 type=0x1 data_index=0x0
 &gt; chan
 receiver got: 0x0 value=0x0
 &gt; send
@@ -78,13 +78,13 @@ receiver got: 0x1 value=0xc0ffee1234
 &gt; pci
 pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 vendor=0x8086 device=0x7000 class=0x6 subclass=0x1 0:1.1 vendor=0x8086 device=0x7010 class=0x1 subclass=0x1 0:1.3 vendor=0x8086 device=0x7113 class=0x6 subclass=0x80 0:2.0 vendor=0x1234 device=0x1111 class=0x3 subclass=0x0 0:3.0 vendor=0x8086 device=0x100e class=0x2 subclass=0x0
 &gt; nic
-e1000 mac=52:54:0:12:34:56 linkUp=0x1
+e1000 mac=52:54:0:12:34:56 link_up=0x1
 &gt; arp
-resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
+resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsed_ticks=0x64 cached_ok=0x1 cached_elapsed_ticks=0x0 resolve_dns_proxy_ok=0x1 dns_mac=52:55:a:0:2:3 resolve_unreachable_ok=0x0
 &gt; ping
-ping gateway ok=0x1 elapsedTicks=0x64
+ping gateway ok=0x1 elapsed_ticks=0x64
 &gt; dns
-dns query ok=0x1 elapsedTicks=0x74
+dns query ok=0x1 elapsed_ticks=0x74
 &gt; disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 &gt; diskwrite
@@ -120,7 +120,7 @@ sent ring3 spawn trigger</code></pre>
     kernel string.
 </p>
 <p>
-    <code>handle 0 (self) -&gt; taskIndex 0x7</code> is the process resolving
+    <code>handle 0 (self) -&gt; task_index 0x7</code> is the process resolving
     its <em>own</em> well-known handle all the way through the kernel
     object table to real ground truth — <code>0x7</code> is exactly what
     <code>ps</code> independently reports for this same process later,
@@ -134,7 +134,7 @@ sent ring3 spawn trigger</code></pre>
     The <code>File.write()</code>/<code>File.read()</code> and
     <code>POSIX</code> lines are the native API and the POSIX shim, both
     exercised from inside that same ring3 process — real
-    <code>obj.method()</code> calls (<code>msgFile.write(...)</code>) and
+    <code>obj.method()</code> calls (<code>msg_file.write(...)</code>) and
     real free-function calls (<code>write(fd, ...)</code>) wrapping two
     different syscalls, not raw syscall numbers either way. The two
     separate <code>POSIX read()</code> lines return two different,
@@ -204,7 +204,7 @@ sent ring3 spawn trigger</code></pre>
     The first two <code>chan</code> reads, with an arbitrary number of
     other commands run in between, show a receiver task genuinely still
     blocked on an empty channel — not a short timeout, not a no-op.
-    <code>send</code> calls the kernel-side <code>channelSend()</code>
+    <code>send</code> calls the kernel-side <code>channel_send()</code>
     directly from the shell's own context; the instant it succeeds, the
     next <code>chan</code> shows the exact value, and the receiver (an
     isolated process with its own private address space) woke up on its
@@ -247,7 +247,7 @@ sent ring3 spawn trigger</code></pre>
     own emulated EEPROM). A broken mapping, a wrong BAR, or garbage
     register reads would have produced a zeroed or nonsense MAC instead
     — immediately, independently wrong, not just "the command didn't
-    crash." <code>linkUp=0x1</code> is a second, separate piece of real
+    crash." <code>link_up=0x1</code> is a second, separate piece of real
     hardware state confirming the same thing. No packet has been sent or
     received yet — this milestone proves the driver can talk to the
     hardware, deliberately not more than that.
@@ -263,19 +263,19 @@ sent ring3 spawn trigger</code></pre>
     same shape milestone 31 first proved, now through the real API:
     QEMU's SLIRP backend, running entirely outside this kernel, received
     a real ARP request and replied with its own well-known, publicly
-    documented default gateway MAC. <code>elapsedTicks=0x64</code> (100
+    documented default gateway MAC. <code>elapsed_ticks=0x64</code> (100
     ticks) is real, non-trivial wall-clock time — an actual network round
     trip took a measurable amount of it.
 </p>
 <p>
-    <code>cachedOk=0x1 cachedElapsedTicks=0x0</code> is the real proof of
+    <code>cached_ok=0x1 cached_elapsed_ticks=0x0</code> is the real proof of
     the cache: resolving the identical address a SECOND time returns
     instantly, zero ticks elapsed, because it never sends a packet at
     all — a concrete, timing-based behavioral difference between a cache
     hit and a cache miss, not just "the second call returned the same
     answer as the first" (which a broken cache that silently re-resolved
-    every time would also produce). <code>resolveDnsProxyOk=0x1
-    dnsMac=52:55:0a:00:02:03</code> resolves a second, different real
+    every time would also produce). <code>resolve_dns_proxy_ok=0x1
+    dns_mac=52:55:0a:00:02:03</code> resolves a second, different real
     address — QEMU SLIRP's own built-in DNS proxy — and gets back a
     genuinely different MAC that follows the exact same publicly
     documented SLIRP convention (embedding the IP's last three octets),
@@ -283,7 +283,7 @@ sent ring3 spawn trigger</code></pre>
     milestone 31 ever exercised.
 </p>
 <p>
-    <code>resolveUnreachableOk=0x0</code> is the negative-space proof:
+    <code>resolve_unreachable_ok=0x0</code> is the negative-space proof:
     asking to resolve an address nothing ever answers for
     (<code>10.0.2.99</code>) correctly returns false once the resolver's
     own real tick-bounded timeout expires, rather than hanging forever or
@@ -297,7 +297,7 @@ sent ring3 spawn trigger</code></pre>
     trip through the full stack built so far: ARP resolution, real IPv4
     header construction, a real checksum, and a real Ethernet send/
     receive, all in one command. <code>ok=0x1</code> means
-    <code>net/icmp.mc</code>'s <code>icmpPing()</code> got back a reply
+    <code>net/icmp.mc</code>'s <code>icmp_ping()</code> got back a reply
     that matched on <em>every</em> real, independently meaningful field —
     the right EtherType, the right IP protocol number, the right source
     IP, the right ICMP type (echo reply, not some other ICMP message),
@@ -311,14 +311,14 @@ sent ring3 spawn trigger</code></pre>
     arriving at all is itself strong indirect evidence the header was
     built correctly — the same "external validation beats
     self-validation" property every proof in this networking phase has
-    looked for. <code>elapsedTicks=0x64</code> matches the same real,
+    looked for. <code>elapsed_ticks=0x64</code> matches the same real,
     non-trivial round-trip time <code>arp</code> measured moments
     earlier — consistent, not coincidental, real network latency.
 </p>
 <p>
     This is also the first milestone in this whole project to give the
     kernel a real, explicit "my IP address" (<code>net/ip.mc</code>'s
-    <code>gMyIp</code>) — previously a bare literal duplicated inside
+    <code>g_my_ip</code>) — previously a bare literal duplicated inside
     <code>arp.mc</code>'s own request-building code, now one shared,
     named value both files use.
 </p>
@@ -330,7 +330,7 @@ sent ring3 spawn trigger</code></pre>
     genuine DNS query to QEMU SLIRP's built-in resolver proxy
     (<code>10.0.2.3</code>, the same address <code>arp</code> already
     resolved back in milestone 32). <code>ok=0x1</code> means
-    <code>net/dns.mc</code>'s <code>dnsQuery()</code> got back a response
+    <code>net/dns.mc</code>'s <code>dns_query()</code> got back a response
     matching the exact transaction ID this query sent, with the response
     (QR) bit set, and at least one real answer record — meaning SLIRP's
     proxy genuinely forwarded the query to a real upstream resolver and
@@ -338,9 +338,9 @@ sent ring3 spawn trigger</code></pre>
     its own.
 </p>
 <p>
-    <code>elapsedTicks=0x74</code> (116 ticks) is itself a meaningful
+    <code>elapsed_ticks=0x74</code> (116 ticks) is itself a meaningful
     detail worth noticing: noticeably <em>higher</em> than
-    <code>ping</code>'s own <code>elapsedTicks=0x64</code> — real,
+    <code>ping</code>'s own <code>elapsed_ticks=0x64</code> — real,
     consistent with DNS resolution genuinely taking one more hop than
     ICMP echo (SLIRP forwards the query out to a real resolver and waits
     for <em>its</em> reply, rather than answering directly the way it
@@ -392,13 +392,13 @@ sent ring3 spawn trigger</code></pre>
 </p>
 <pre><code>Channel.receive() got trigger 0x1
 hello from a LOADED process! 0xc0ffee
-Process.spawn() launched taskIndex 0x9
+Process.spawn() launched task_index 0x9
 hello from a LOADED process! 0xc0ffee
 ProcessHandle.open(rights=0) ok=0x1
 unauthorized ProcessHandle.query() got 0xffffffffffffffff
 ProcessHandle.open(RIGHT_QUERY) ok=0x1
-handle 0 (self) -&gt; taskIndex 0x9
-authorized ProcessHandle.query() got taskIndex 0x9
+handle 0 (self) -&gt; task_index 0x9
+authorized ProcessHandle.query() got task_index 0x9
 handle 99 (invalid) -&gt; 0xffffffffffffffff
 File.write() wrote 0x36
 File.read() got back 0x36
@@ -431,7 +431,7 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
 </p>
 <p>
     <code>ProcessHandle.open(rights=0) ok=0x1</code> through
-    <code>authorized ProcessHandle.query() got taskIndex 0x9</code> are
+    <code>authorized ProcessHandle.query() got task_index 0x9</code> are
     milestone 27's proof, run by the <em>parent</em> right after
     <code>Process.spawn()</code>, targeting the child it just launched.
     Requesting zero rights still yields a real, valid handle
@@ -440,10 +440,10 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
     <code>Channel</code>. The next line is the actual point: querying
     through that rights-less handle is correctly rejected. A second
     handle, this time requesting <code>RIGHT_QUERY</code>, succeeds — and
-    its query returns <code>0x9</code>, the exact taskIndex
+    its query returns <code>0x9</code>, the exact task_index
     <code>Process.spawn()</code> already reported two lines earlier, an
     independent cross-check rather than a hardcoded echo. The
-    <code>handle 0 (self) -&gt; taskIndex 0x9</code> line in between is the
+    <code>handle 0 (self) -&gt; task_index 0x9</code> line in between is the
     child's own pre-existing self-query (rights-granted since milestone
     14, actually verified for the first time here) — still correct,
     confirming the newly-real check doesn't break the one path already
@@ -469,7 +469,7 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
 sent ring3 forbidden-write trigger - expect a page fault
 Channel.receive() got trigger 0x2
 attempting forbidden ring3 write to 0x100000
-page fault at 0x100000, errorCode=0x7, halting</code></pre>
+page fault at 0x100000, error_code=0x7, halting</code></pre>
 <p>
     This is milestone 26's actual proof. <code>attempting forbidden ring3
     write to 0x100000</code> confirms the process really reached the write
@@ -477,7 +477,7 @@ page fault at 0x100000, errorCode=0x7, halting</code></pre>
     <code>"forbidden write succeeded (BUG!) at 0x..."</code> — never
     appears, because the CPU faulted on the write itself before that
     syscall could even be staged. <code>page fault at 0x100000,
-    errorCode=0x7, halting</code> is the kernel's existing page-fault
+    error_code=0x7, halting</code> is the kernel's existing page-fault
     handler independently confirming the exact faulting address (read
     from CR2, not anything the ring3 process reported about itself) —
     <code>0x100000</code>, the kernel's own multiboot load address, inside
@@ -486,7 +486,7 @@ page fault at 0x100000, errorCode=0x7, halting</code></pre>
     command printed the "(BUG!)" line and kept running, the write landing
     silently in live kernel memory — the absence of that line, replaced
     by a fault at exactly the address written to, is what makes this a
-    real negative-space proof. <code>errorCode=0x7</code> (present + write
+    real negative-space proof. <code>error_code=0x7</code> (present + write
     + user — milestone 28's addition to this handler) confirms it
     specifically as a write violation, worth comparing directly against
     the NX proof below.
@@ -505,19 +505,19 @@ page fault at 0x100000, errorCode=0x7, halting</code></pre>
 sent ring3 stack-execution trigger - expect a page fault
 Channel.receive() got trigger 0x3
 attempting to execute ring3 stack byte at 0x80020000
-page fault at 0x80020000, errorCode=0x15, halting</code></pre>
+page fault at 0x80020000, error_code=0x15, halting</code></pre>
 <p>
     If <code>PAGE_NX</code> (<code>mm/paging.mc</code>) weren't actually
     enforced on the stack mapping, this would be completely harmless — a
     bare <code>ret</code> just pops the return address the preceding
     <code>call</code> pushed and jumps straight back — so the
     <code>"stack execution succeeded (BUG!)"</code> line right after it in
-    the source would print. It never does. <code>errorCode=0x15</code>
+    the source would print. It never does. <code>error_code=0x15</code>
     (binary <code>10101</code>: present + user + <strong>bit 4,
     instruction fetch</strong>) is the actual proof — the CPU's own
     hardware signal that this specific access was an execute attempt, not
     a coincidental fault. Directly comparable against
-    <code>ring3fault</code>'s own <code>errorCode=0x7</code> (bit 4 clear)
+    <code>ring3fault</code>'s own <code>error_code=0x7</code> (bit 4 clear)
     captured moments above: two different deliberate violations, two
     different, independently-checkable error-code signatures.
 </p>

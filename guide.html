@@ -54,7 +54,7 @@
 <h2>Timers &amp; interrupts</h2>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
-<tr><td><code>ticks</code></td><td>prints the current PIT tick counter (<code>gTickCount</code>), incremented by the timer interrupt at ~100Hz nominal (QEMU/TCG's actual effective rate varies a lot, often several times faster)</td></tr>
+<tr><td><code>ticks</code></td><td>prints the current PIT tick counter (<code>g_tick_count</code>), incremented by the timer interrupt at ~100Hz nominal (QEMU/TCG's actual effective rate varies a lot, often several times faster)</td></tr>
 </table>
 
 <h2>Heap</h2>
@@ -75,7 +75,7 @@
 
 <h2>Physical frames</h2>
 <p>
-    A bitmap allocator (<code>allocFrame</code>/<code>freeFrame</code>)
+    A bitmap allocator (<code>alloc_frame</code>/<code>free_frame</code>)
     built by parsing the real multiboot memory map at boot.
 </p>
 <table>
@@ -100,13 +100,13 @@
 </p>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
-<tr><td><code>tasks</code></td><td>prints the boot-time demo tasks' counters: two purely cooperative tasks (lockstep), one that never yields at all (runs orders of magnitude further, proving preemption forces it off the CPU periodically), and one that sleeps between increments (its count tracks <code>ticks / sleepInterval</code>)</td></tr>
+<tr><td><code>tasks</code></td><td>prints the boot-time demo tasks' counters: two purely cooperative tasks (lockstep), one that never yields at all (runs orders of magnitude further, proving preemption forces it off the CPU periodically), and one that sleeps between increments (its count tracks <code>ticks / sleep_interval</code>)</td></tr>
 </table>
 
 <h2>Process isolation demo</h2>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
-<tr><td><code>procs</code></td><td>two boot-time demo tasks (<code>procA</code>/<code>procB</code>), each with its own private address space, both mapping the <em>identical</em> virtual address to their own physical frame — prints each one's value and physical address, proving real isolation (not just separate stacks)</td></tr>
+<tr><td><code>procs</code></td><td>two boot-time demo tasks (<code>proc_a</code>/<code>proc_b</code>), each with its own private address space, both mapping the <em>identical</em> virtual address to their own physical frame — prints each one's value and physical address, proving real isolation (not just separate stacks)</td></tr>
 </table>
 
 <h2>Process model &amp; kernel objects</h2>
@@ -150,7 +150,7 @@
 <tr><th>Command</th><th>What it does</th></tr>
 <tr><td><code>pci</code></td><td>walks the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism across bus 0's 32 device slots and prints every real device found — vendor/device ID, class/subclass — independently checkable against QEMU's own default machine model (see <a href="reference.html#pci">Hardware discovery: PCI</a>)</td></tr>
 <tr><td><code>nic</code></td><td>enables the e1000 NIC over PCI, maps its MMIO register file, and prints its real MAC address and link-up status — read straight from hardware, not fabricated (see <a href="reference.html#e1000">The e1000 NIC driver</a>)</td></tr>
-<tr><td><code>arp</code></td><td>exercises the real ARP resolver (<code>arpResolve()</code>) in four checks: resolves QEMU's default gateway (real external round trip), resolves it again (instant cache hit — zero elapsed ticks), resolves a second real address (QEMU's DNS proxy), and resolves an unreachable address (correctly fails after a real timeout) (see <a href="reference.html#arp">A real ARP resolver</a>)</td></tr>
+<tr><td><code>arp</code></td><td>exercises the real ARP resolver (<code>arp_resolve()</code>) in four checks: resolves QEMU's default gateway (real external round trip), resolves it again (instant cache hit — zero elapsed ticks), resolves a second real address (QEMU's DNS proxy), and resolves an unreachable address (correctly fails after a real timeout) (see <a href="reference.html#arp">A real ARP resolver</a>)</td></tr>
 <tr><td><code>ping</code></td><td>sends a real ICMP echo request to QEMU's default gateway (resolving its MAC via the real ARP resolver first) and verifies a genuine, correctly-matching reply — real IPv4 header, real checksum, real external round trip (see <a href="reference.html#ip">A real IP layer</a>)</td></tr>
 <tr><td><code>dns</code></td><td>sends a real, hand-crafted DNS query over real UDP to QEMU's built-in resolver proxy and verifies a genuine, correctly-matching response — real pseudo-header checksum, real answer from a real upstream resolver (see <a href="reference.html#udp">A real UDP layer</a>)</td></tr>
 </table>
