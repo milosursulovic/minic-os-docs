@@ -80,7 +80,7 @@ pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 
 &gt; nic
 e1000 mac=52:54:0:12:34:56 linkUp=0x1
 &gt; arp
-arp request sent=0x1 reply len=0x40 isArpReply=0x1 from=52:55:a:0:2:2 senderIp=a.0.2.2
+resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
 &gt; disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 &gt; diskwrite
@@ -249,34 +249,42 @@ sent ring3 spawn trigger</code></pre>
     hardware, deliberately not more than that.
 </p>
 
-<h2>A genuine packet round trip</h2>
+<h2>A real ARP resolver</h2>
 <p>
-    <code>arp</code> is milestone 31's proof, and it's the strongest one
-    this driver has produced yet — a real, external, two-way network
-    round trip, not a loopback or anything this kernel could fake on its
-    own. <code>sent=0x1</code> is the TX half: the e1000's own hardware
-    set the transmit descriptor's DD (descriptor done) status bit after
-    genuinely transmitting a hand-crafted 60-byte Ethernet+ARP frame —
-    not something software could claim by itself. <code>reply
-    len=0x40</code> means something real arrived back in the RX ring
-    within the polling window. <code>isArpReply=0x1</code> confirms it's
-    genuinely an ARP reply (EtherType <code>0x0806</code>, opcode
-    <code>0x0002</code>), not arbitrary noise.
+    <code>arp</code> is milestone 32's proof, exercising the real
+    <code>net/arp.mc</code> resolver instead of milestone 31's own
+    hardcoded one-shot flow — four separate, independently checkable
+    claims in one command. <code>resolve gateway ok=0x1
+    mac=52:55:0a:00:02:02</code> is a genuine external round trip, the
+    same shape milestone 31 first proved, now through the real API:
+    QEMU's SLIRP backend, running entirely outside this kernel, received
+    a real ARP request and replied with its own well-known, publicly
+    documented default gateway MAC. <code>elapsedTicks=0x64</code> (100
+    ticks) is real, non-trivial wall-clock time — an actual network round
+    trip took a measurable amount of it.
 </p>
 <p>
-    The strongest part is what the reply contains:
-    <code>from=52:55:0a:00:02:02</code> and <code>senderIp=10.0.2.2</code>
-    (shown here in this kernel's usual hex-per-octet style,
-    <code>a.0.2.2</code>) are QEMU's own well-known, publicly documented
-    default gateway MAC and IP for its SLIRP user-mode networking
-    backend — the exact address this test asked "who has 10.0.2.2."
-    QEMU's real network stack, running entirely outside this kernel,
-    received the crafted request, parsed it, and replied, and this
-    kernel's RX ring genuinely captured that reply. Getting any of this
-    wrong (no reply at all, a reply that isn't really ARP, a sender
-    address that doesn't match QEMU's documented default) would have
-    been immediately, independently wrong against public knowledge
-    neither this kernel nor its own test scripts control.
+    <code>cachedOk=0x1 cachedElapsedTicks=0x0</code> is the real proof of
+    the cache: resolving the identical address a SECOND time returns
+    instantly, zero ticks elapsed, because it never sends a packet at
+    all — a concrete, timing-based behavioral difference between a cache
+    hit and a cache miss, not just "the second call returned the same
+    answer as the first" (which a broken cache that silently re-resolved
+    every time would also produce). <code>resolveDnsProxyOk=0x1
+    dnsMac=52:55:0a:00:02:03</code> resolves a second, different real
+    address — QEMU SLIRP's own built-in DNS proxy — and gets back a
+    genuinely different MAC that follows the exact same publicly
+    documented SLIRP convention (embedding the IP's last three octets),
+    proving the resolver generalizes past the one fixed address
+    milestone 31 ever exercised.
+</p>
+<p>
+    <code>resolveUnreachableOk=0x0</code> is the negative-space proof:
+    asking to resolve an address nothing ever answers for
+    (<code>10.0.2.99</code>) correctly returns false once the resolver's
+    own real tick-bounded timeout expires, rather than hanging forever or
+    returning garbage — a real, honest failure result for a real failure
+    case.
 </p>
 
 <h2>Disk &amp; filesystem</h2>

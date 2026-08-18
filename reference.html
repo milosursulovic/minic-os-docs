@@ -88,6 +88,9 @@ net/              networking (milestone 30 onward)
                      mapping, real MAC/link-status readback. Milestone
                      31: real TX/RX descriptor rings, a genuine packet
                      round trip verified via a hand-crafted ARP request
+  arp.mc             milestone 32: a real ARP resolver - a genuine
+                     cache, arpResolve() for any target address, client
+                     (resolver) only, no responder
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand
   frames.mc          multiboot memory map parser + physical frame allocator
@@ -567,6 +570,43 @@ int close(int fd);</code></pre>
     <a href="examples.html">Walkthrough</a> for the real captured output.
 </p>
 
+<h2 id="arp">A real ARP resolver</h2>
+<p>
+    Milestone 32 replaces milestone 31's own hardcoded one-shot ARP
+    request/reply with a genuine resolver, built directly on the proven
+    TX/RX plumbing rather than starting over. <code>net/arp.mc</code>
+    keeps a fixed-size cache (<code>ArpEntry[8]</code>) and exposes one
+    real entry point, <code>arpResolve(ip, macOut)</code>: check the
+    cache first; only on a miss, send a real request and poll for a
+    genuinely matching reply (right EtherType, right opcode, right
+    sender IP — anything else that arrives is ignored, not mistaken for
+    the answer) against a real <code>gTickCount</code>-bounded timeout,
+    the same lesson milestone 31 already learned about spin counts not
+    reliably corresponding to real time.
+</p>
+<p>
+    Deliberately scoped as a <strong>client (resolver) only</strong>, not
+    a responder — this kernel has no assigned IP address of its own in
+    any real sense yet (no DHCP, no static configuration), so answering
+    "who has &lt;our address&gt;" doesn't mean anything until it does.
+    The cache also has no eviction or TTL — a fixed-size table that just
+    fills up, the same "narrowest safe first version" every driver-layer
+    milestone in this phase has used.
+</p>
+<p>
+    The shell's <code>arp</code> command (same name milestone 31 used,
+    now backed by the real mechanism) runs four checks in one pass, each
+    independently checkable: resolve the gateway (a real external round
+    trip, non-trivial elapsed ticks); resolve it again (zero elapsed
+    ticks — a real, timing-based proof of the cache, not just "the same
+    answer twice"); resolve a second, different real address (QEMU
+    SLIRP's own DNS proxy, <code>10.0.2.3</code> — proving the resolver
+    genuinely generalizes); and resolve an address nothing answers for
+    (correctly returns false after the real timeout, not a hang). See
+    the <a href="examples.html">Walkthrough</a> for the real captured
+    output.
+</p>
+
 <h2 id="testing">Testing methodology</h2>
 <p>
     Every claim in this project is backed by a concrete, checkable
@@ -600,7 +640,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
 <li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
-<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <strong>Still fully open</strong>: no real ARP subsystem (<code>arp</code> crafts one hardcoded request/reply pair as a driver-level test, not a general address-resolution mechanism), no IP, no UDP/TCP — the entire protocol stack above the device driver remains ahead, each realistically its own future milestone. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.mc</code> already established.</li>
+<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arpResolve()</code> for any target address. <strong>Still fully open</strong>: ARP is client-only (this kernel never answers "who has our address" — it has no real IP configuration of its own yet), the cache has no eviction/TTL, and no IP, no UDP/TCP — the entire protocol stack above ARP remains ahead, each realistically its own future milestone. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.mc</code> already established.</li>
 </ul>
 
 </main>

@@ -149,7 +149,7 @@
 <tr><th>Command</th><th>What it does</th></tr>
 <tr><td><code>pci</code></td><td>walks the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism across bus 0's 32 device slots and prints every real device found — vendor/device ID, class/subclass — independently checkable against QEMU's own default machine model (see <a href="reference.html#pci">Hardware discovery: PCI</a>)</td></tr>
 <tr><td><code>nic</code></td><td>enables the e1000 NIC over PCI, maps its MMIO register file, and prints its real MAC address and link-up status — read straight from hardware, not fabricated (see <a href="reference.html#e1000">The e1000 NIC driver</a>)</td></tr>
-<tr><td><code>arp</code></td><td>sets up real TX/RX descriptor rings and sends one hand-crafted Ethernet+ARP request to QEMU's default gateway (10.0.2.2) — a real external round trip, not a general ARP mechanism; prints the real reply if one arrives (see <a href="reference.html#e1000">The e1000 NIC driver</a>)</td></tr>
+<tr><td><code>arp</code></td><td>exercises the real ARP resolver (<code>arpResolve()</code>) in four checks: resolves QEMU's default gateway (real external round trip), resolves it again (instant cache hit — zero elapsed ticks), resolves a second real address (QEMU's DNS proxy), and resolves an unreachable address (correctly fails after a real timeout) (see <a href="reference.html#arp">A real ARP resolver</a>)</td></tr>
 </table>
 
 <h2>Raw disk I/O</h2>
