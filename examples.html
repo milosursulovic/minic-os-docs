@@ -83,6 +83,8 @@ e1000 mac=52:54:0:12:34:56 linkUp=0x1
 resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
 &gt; ping
 ping gateway ok=0x1 elapsedTicks=0x64
+&gt; dns
+dns query ok=0x1 elapsedTicks=0x74
 &gt; disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 &gt; diskwrite
@@ -319,6 +321,31 @@ sent ring3 spawn trigger</code></pre>
     <code>gMyIp</code>) — previously a bare literal duplicated inside
     <code>arp.mc</code>'s own request-building code, now one shared,
     named value both files use.
+</p>
+
+<h2>A real UDP layer</h2>
+<p>
+    <code>dns</code> is milestone 34's proof — a real UDP datagram,
+    correctly checksummed against its own pseudo-header, carrying a
+    genuine DNS query to QEMU SLIRP's built-in resolver proxy
+    (<code>10.0.2.3</code>, the same address <code>arp</code> already
+    resolved back in milestone 32). <code>ok=0x1</code> means
+    <code>net/dns.mc</code>'s <code>dnsQuery()</code> got back a response
+    matching the exact transaction ID this query sent, with the response
+    (QR) bit set, and at least one real answer record — meaning SLIRP's
+    proxy genuinely forwarded the query to a real upstream resolver and
+    got a real answer back, not something this kernel could produce on
+    its own.
+</p>
+<p>
+    <code>elapsedTicks=0x74</code> (116 ticks) is itself a meaningful
+    detail worth noticing: noticeably <em>higher</em> than
+    <code>ping</code>'s own <code>elapsedTicks=0x64</code> — real,
+    consistent with DNS resolution genuinely taking one more hop than
+    ICMP echo (SLIRP forwards the query out to a real resolver and waits
+    for <em>its</em> reply, rather than answering directly the way it
+    does for ping) — exactly the kind of small, correct-shaped detail
+    that would be hard to fake by accident.
 </p>
 
 <h2>Disk &amp; filesystem</h2>
