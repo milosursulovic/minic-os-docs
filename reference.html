@@ -298,6 +298,30 @@ shell/            the interactive shell
     busy-spins - acceptable here since <code>hello_service</code> exits
     almost immediately.
 </p>
+<p>
+    Milestone 39 gives <code>process_exit</code> real teeth: a new
+    <code>mm/paging.c</code> function, <code>free_address_space(pml4_phys)</code>,
+    walks the exiting process's own page tables (<code>PDPT[2..511] -&gt;
+    PD -&gt; PT</code> - the private per-process region; <code>PDPT[0]</code>/
+    <code>[1]</code>, the shared kernel/heap sub-tables, are never
+    touched), freeing every present leaf frame plus the PT/PD frames
+    themselves, then the process's own PDPT and PML4 frames. Safe to
+    call from inside <code>process_exit()</code> even though it tears
+    down the caller's own address space: the syscall runs in kernel
+    mode on the shared identity map throughout, and CR3 only actually
+    moves off the freed PML4 once <code>yield()</code>'s own
+    <code>load_cr3()</code> runs immediately after. Still not reclaimed:
+    the process/task table <em>slot</em> itself, and the task's own
+    kalloc'd kernel stack (freeing your own currently-executing stack
+    from within itself is a genuinely riskier problem than freeing
+    memory you're not standing on). Verified with real diagnostic prints
+    of <code>g_free_frame_count</code> around the free (added, used to
+    get exact numbers, then removed): both of hello_service's exit
+    cycles returned the free count to the identical baseline, and
+    <code>ps</code> showed the second spawn's <code>cr3</code> was
+    bit-for-bit the same physical frame the first spawn's exit had just
+    freed - real reuse, not coincidence.
+</p>
 
 <h2 id="ipc">IPC (channels)</h2>
 <p>
@@ -901,7 +925,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <ul>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>channel</code> (milestone 25) and <code>process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
-<li><s>No process teardown/exit exists at all</s> — <strong>fixed in milestone 37</strong> (see <a href="#process-model">Process model &amp; isolation</a>): a real <code>process_exit</code> syscall, verified with <code>ps</code>'s own <code>exited=0x</code> field. <strong>Still open</strong>: nothing is reclaimed when a process exits — its frames stay mapped, its process/task table slot stays occupied forever (so a long-running system that spawns and exits many processes will eventually hit the fixed table caps below), and any handle still pointing at it stays valid but now points at something that will never run again.</li>
+<li><s>No process teardown/exit exists at all</s> — <strong>fixed in milestone 37</strong> (see <a href="#process-model">Process model &amp; isolation</a>): a real <code>process_exit</code> syscall, verified with <code>ps</code>'s own <code>exited=0x</code> field. <s>Nothing is reclaimed when a process exits</s> — <strong>frames fixed in milestone 39</strong>: image, stack, and page-table frames plus the process's own PML4/PDPT are all freed, verified against exact frame-count arithmetic. <strong>Still open</strong>: the process/task table <em>slot</em> itself stays occupied forever (so a long-running system that spawns and exits many processes will eventually hit the fixed table caps below, even though the memory itself no longer leaks), the task's own kalloc'd kernel stack isn't freed either (a genuinely riskier problem - freeing your own currently-executing stack from within itself), and any handle still pointing at an exited process stays valid but now points at something that will never run again.</li>
 <li><strong><code>spawn_builtin</code>'s program registry is a single fixed, compile-time entry</strong> (<code>hello_service.c</code>) — nothing can register a new spawnable program at runtime, and nothing yet bridges "a real service lives on disk" to this specific mechanism (that's still the separate <code>spawn_process_from_path()</code>/syscall 6 path). <code>init.c</code> restarts its one service exactly once (milestone 38) — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills (see the process-table limitation below).</li>
 <li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
