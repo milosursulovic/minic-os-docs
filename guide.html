@@ -161,6 +161,7 @@
 <tr><td><code>ping</code></td><td>sends a real ICMP echo request to QEMU's default gateway (resolving its MAC via the real ARP resolver first) and verifies a genuine, correctly-matching reply — real IPv4 header, real checksum, real external round trip (see <a href="reference.html#ip">A real IP layer</a>)</td></tr>
 <tr><td><code>dns</code></td><td>sends a real, hand-crafted DNS query over real UDP to QEMU's built-in resolver proxy and verifies a genuine, correctly-matching response — real pseudo-header checksum, real answer from a real upstream resolver (see <a href="reference.html#udp">A real UDP layer</a>)</td></tr>
 <tr><td><code>tcp</code></td><td>resolves <code>example.com</code>'s real IP (a genuine DNS A-record lookup, not a hardcoded address), opens a real TCP connection to it over the gateway, sends an actual HTTP/1.1 GET, and verifies a genuine <code>HTTP</code> status line came back in the reply — a real handshake and a real external HTTP round trip, not a self-contained proof (see <a href="reference.html#tcp">A real TCP client</a>)</td></tr>
+<tr><td><code>netconns</code></td><td>dumps the real TCP connection table's in-use slots (local port, remote IP:port) — empty both before and after a completed fetch, confirming slots are freed, not leaked (see <a href="reference.html#tcp-connections">TCP connection table</a>)</td></tr>
 </table>
 
 <h2>Raw disk I/O</h2>

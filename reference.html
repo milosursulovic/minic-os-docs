@@ -552,21 +552,55 @@ shell/            the interactive shell
     immediately after (both landed on handle <code>0x2</code>).
 </p>
 <p>
-    One thing noticed during this work, not a regression: running the
+    Testing this surfaced a real bug, since fixed: running the
     kernel-mode <code>tcp</code> command right after an async fetch to
     the same DNS-resolved address failed fast
     (<code>elapsed_ticks=0x3</code>, clearly not a real timeout) -
-    traced to hitting the exact same remote IP twice in a row with this
-    kernel's already-documented fixed single local port
-    (<code>LOCAL_PORT=43981</code>, no connection table - see
-    <a href="#limitations">Known limitations</a>). Confirmed pre-existing
-    and unrelated to the async work: two back-to-back <em>synchronous</em>
-    kernel-mode <code>tcp</code> fetches succeeded cleanly when DNS
-    round-robin happened to hand them two different remote IPs.
-    Deliberately narrow overall: ping, DNS, and TCP fetch only - no
-    async ARP or raw UDP for ring3, and neither protocol needs its own
-    ring3-facing syscall the way ping/DNS/TCP did, since both already
-    sit underneath them.
+    traced to hitting the exact same remote IP twice in a row while
+    every TCP connection shared one hardcoded local port. Confirmed via
+    a clean isolating test (two back-to-back <em>synchronous</em>
+    kernel-mode <code>tcp</code> fetches succeeded when DNS round-robin
+    happened to hand them different remote IPs) that this was a real,
+    pre-existing collision, not an async regression - and fixed
+    properly with a real connection table (see
+    <a href="#tcp-connections">TCP connection table</a> below) rather
+    than worked around. Deliberately narrow overall: ping, DNS, and TCP
+    fetch only - no async ARP or raw UDP for ring3, and neither
+    protocol needs its own ring3-facing syscall the way ping/DNS/TCP
+    did, since both already sit underneath them.
+</p>
+
+<h2 id="tcp-connections">TCP connection table</h2>
+<p>
+    Every TCP connection used to share one hardcoded local port
+    (<code>43981</code>), so two connections close together - to the
+    same remote address in particular - could collide on the identical
+    4-tuple and fail. <code>net/tcp.c</code> now holds a real 4-slot
+    connection table: each slot allocates its own unique local port and
+    tracks the remote IP/port it's talking to. <code>tcp_fetch()</code>'s
+    existing body (handshake, request, receive loop, best-effort close -
+    proven, unchanged logic) became a static <code>tcp_fetch_conn()</code>
+    taking the allocated local port as an extra parameter, threaded
+    through to <code>tcp_send_segment()</code>/<code>tcp_wait_segment()</code>.
+    The public <code>tcp_fetch()</code> is a thin wrapper around it: open
+    a connection slot, run the real logic, close the slot - guaranteeing
+    the slot is freed on every exit path (including several early-
+    failure returns inside the handshake) without duplicating a free
+    call at each one.
+</p>
+<p>
+    New shell command <code>netconns</code> dumps the table's current
+    state (local port, remote IP:port) for each in-use slot - the same
+    introspection discipline every other kernel table here already has
+    (<code>tasks</code>/<code>ps</code>/<code>objs</code>/<code>frames</code>).
+    Verified in QEMU, twice: the exact scenario that failed before (an
+    async TCP fetch immediately followed by a kernel-mode <code>tcp</code>
+    fetch to the same resolved address) now succeeds both times, with a
+    real <code>elapsed_ticks</code> matching a genuine round trip
+    (<code>0x1e</code>-<code>0x32</code>) instead of the previous fast
+    rejection (<code>elapsed_ticks=0x3</code>). <code>netconns</code>
+    correctly shows an empty table both before and after a completed
+    fetch, confirming slots are actually freed, not leaked.
 </p>
 
 <h2 id="syscalls">The ring0/ring3 boundary &amp; syscall ABI</h2>
@@ -1132,13 +1166,13 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>channel</code> and <code>process</code> handles are real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one. <code>unregister_service</code> (see <a href="#process-model">Process model &amp; isolation</a>) shares this same gap: any process can unregister any runtime service slot, not just the one it registered.</li>
 <li><strong>A handle another process holds to a still-running process can be released early</strong> (<code>handle_close</code>) and everything tied to an exited process is reclaimed (frames, process/task slot, kernel object table) — see <a href="#process-model">Process model &amp; isolation</a> for the full mechanism. <strong>Still open</strong>: any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the pointer-ownership gap above.</li>
 <li><strong><code>init.c</code> restarts its one service exactly once per cycle</strong>, not in an unbounded loop — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills.</li>
-<li><strong>Async file I/O (see <a href="#async-io">Async file I/O</a>) is backed by a fixed pool of 4 pending-request slots with a 512-byte buffer each</strong> — an operation larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. <strong>Async networking (see <a href="#async-net">Async networking</a>) covers ICMP ping, DNS resolve, and TCP fetch</strong> — ping/DNS share a 2-slot pool, TCP fetch has its own 2-slot pool with a 256-byte request cap and a 512-byte response cap. No async ARP or raw UDP for ring3, and neither has a ring3-facing syscall at all. Async TCP fetch inherits every limitation the existing kernel-mode <code>tcp</code> client already has (see below) — in particular, its fixed single local port means two fetches to the same remote address close together, async or sync or a mix, can collide and fail; this isn't new to async, just newly easy to trigger by composing operations quickly.</li>
+<li><strong>Async file I/O (see <a href="#async-io">Async file I/O</a>) is backed by a fixed pool of 4 pending-request slots with a 512-byte buffer each</strong> — an operation larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. <strong>Async networking (see <a href="#async-net">Async networking</a>) covers ICMP ping, DNS resolve, and TCP fetch</strong> — ping/DNS share a 2-slot pool, TCP fetch has its own 2-slot pool with a 256-byte request cap and a 512-byte response cap. No async ARP or raw UDP for ring3, and neither has a ring3-facing syscall at all. Async TCP fetch inherits every limitation the existing kernel-mode <code>tcp</code> client already has (see below) — it now shares that client's real <a href="#tcp-connections">connection table</a>, so two fetches to the same remote address close together, async or sync or a mix, no longer collide the way a single fixed local port used to.</li>
 <li><strong>A loaded ring3 program's own code+data image is fully executable</strong> (no W^X split within it — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so NX protection, which does cover every dynamically-mapped pure-data region including every ring3 process's own user stack, can't be applied within a loaded image itself; see <a href="#memory-protection">Memory protection</a>). ASLR and true process sandboxing (beyond the address-space isolation this kernel already has) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
 <li><strong>PCI enumeration is bus 0 only</strong> (see <a href="#pci">Hardware discovery: PCI</a>) — no bridge recursion, no general driver-registration framework. <code>disk/ata.c</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> finds that exact same controller.</li>
-<li><strong>ARP is client-only</strong> (no responder), with no cache eviction/TTL. This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. <strong>ICMP is the only IP-layer protocol implemented</strong>, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no record types beyond A — it exists purely as an external test vehicle for UDP (<code>dns_resolve_a()</code>, used for TCP's own target resolution, does real answer-section parsing but still only ever asks for one A record, no retry, no multiple questions). <strong>TCP</strong> (see <a href="#tcp">A real TCP client</a>) is client-only, one connection at a time with no connection table, no retransmission or congestion control at all (a lost segment just times out), no options (no window scaling, no SACK), and close is best-effort only. The e1000's TX/RX rings are fixed-size (8 descriptors each), and both poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
+<li><strong>ARP is client-only</strong> (no responder), with no cache eviction/TTL. This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. <strong>ICMP is the only IP-layer protocol implemented</strong>, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no record types beyond A — it exists purely as an external test vehicle for UDP (<code>dns_resolve_a()</code>, used for TCP's own target resolution, does real answer-section parsing but still only ever asks for one A record, no retry, no multiple questions). <strong>TCP</strong> (see <a href="#tcp">A real TCP client</a>) is client-only — no listening/server side — with a real but small <a href="#tcp-connections">connection table</a> (4 slots), no retransmission or congestion control at all (a lost segment just times out), no options (no window scaling, no SACK), and close is best-effort only. The e1000's TX/RX rings are fixed-size (8 descriptors each), and both poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
 </ul>
 
 </main>
