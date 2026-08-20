@@ -117,6 +117,7 @@
 <h2>Phase XI — service architecture + a real init</h2>
 <ul>
 <li><strong>36: a real init process</strong> <span class="tag">done</span> — Phase XI's first step, deliberately narrow. A new, dedicated ring3 process, <code>proc/init.c</code>, spawns a real service (<code>proc/hello_service.c</code>) via a new syscall 11 (<code>spawn_builtin</code>) referencing a small, fixed, kernel-embedded program registry addressed by <em>index</em> — not a raw pointer, which would let ring3 code claim any address in memory is a valid program image, exactly the hole the capability/rights phase (milestones 25-27) worked to close everywhere else. This also sidesteps a real chicken-and-egg problem: a fresh <code>disk.img</code> has no files on it until <code>mkfs</code>+<code>install</code> run manually, so a real init can't depend on the filesystem existing yet — <code>spawn_process_from_path()</code> (syscall 6) already covers "spawn a real file from disk" for when that's what's wanted. Deliberately does <strong>not</strong> touch the existing boot-time demo process (<code>proc/ring3prog.c</code>, unchanged) or the kernel's own debug shell (<code>shell/shell.c</code>'s ~40 commands stay kernel-mode — most of them touch raw kernel internals like physical frames directly, which shouldn't be a userspace syscall in a real design anyway). A real bug was hit and fixed while wiring the registry: a static array of pointers initialized with <code>&amp;symbol</code> expressions needs an absolute 64-bit relocation not representable in the kernel's ELF32 build container — fixed by resolving the address at the point of use instead, an ordinary RIP-relative reference. Verified in QEMU, twice: init's own startup and spawn-confirmation messages, hello_service's own message, and <code>ps</code> independently confirming three distinct processes with three distinct <code>cr3</code> values — init's self-reported task_index matches <code>ps</code>'s own output exactly, not an unverified echo.</li>
+<li><strong>37: real process exit</strong> <span class="tag">done</span> — Phase XI's second step, closing a gap flagged since the earliest process-model milestones. New syscall 12 (<code>process_exit</code>) marks the calling task's slot and process slot as no-longer-alive, then yields away for the last time; the scheduler's scan (<code>sched/task.c</code>'s <code>yield()</code>) permanently skips a slot marked this way — the exact same shape it already uses to skip a temporarily blocked task, just with no wake condition that will ever fire. <code>task.used</code>/<code>process.used</code> turned out to already exist but be entirely write-only (set true at creation, never read anywhere) — repurposing them as real "is this still alive" flags needed no new fields, just giving existing ones their first real meaning. Deliberately does <strong>not</strong> reclaim resources on exit — frames stay mapped, the table slot stays occupied forever, and any handle still pointing at an exited process stays valid but now points at something that will never run again; real, separate follow-on work. <code>proc/hello_service.c</code> now calls <code>process_exit()</code> right after its own startup message instead of idling forever — the cleanest possible checkable claim for "a process can genuinely stop running." <code>shell.c</code>'s <code>ps</code> gained an <code>exited=0x</code> field per process. Verified in QEMU, twice: <code>ps</code> shows hello_service's <code>exited=0x1</code> while the boot-time demo and init both stay <code>exited=0x0</code>; <code>tasks</code> confirmed the scheduler and every pre-existing demo task stayed healthy, and <code>install</code>+<code>spawn</code> still worked correctly alongside the now-exited process, spawning a fourth process cleanly.</li>
 </ul>
 <p>
     Still ahead in this phase: the existing hardcoded shell loop
@@ -124,11 +125,12 @@
     the next step — most of its command surface touches raw kernel
     internals that shouldn't be arbitrary userspace syscalls in a real
     design, a substantially bigger and separate problem from "does a
-    real init exist." Process supervision (restart on exit — there's no
-    process-exit mechanism at all yet), registering a new spawnable
-    service at runtime rather than only from the fixed compile-time
-    registry, and async I/O as a cross-cutting pass once sync I/O works
-    everywhere are all still open.
+    real init exist." Process supervision (restart on exit — init never
+    watches for one now that real exit exists), reclaiming an exited
+    process's resources, registering a new spawnable service at runtime
+    rather than only from the fixed compile-time registry, and async I/O
+    as a cross-cutting pass once sync I/O works everywhere are all still
+    open.
 </p>
 <p>
     Self-hosting used to be framed as "<code>minicc</code> compiled for
