@@ -432,7 +432,7 @@ shell/            the interactive shell
     pool with a 512-byte cap per operation.
 </p>
 
-<h2 id="async-net">Async networking: the first ring3-facing network capability</h2>
+<h2 id="async-net">Async networking: ring3-facing network capabilities</h2>
 <p>
     Every network operation in this kernel - ARP, ICMP, UDP, DNS, TCP -
     was a kernel-mode shell command only, with zero ring3-facing
@@ -508,9 +508,65 @@ shell/            the interactive shell
     the same boot - a genuine cross-check, not a coincidence - and
     <code>tcp_fetch_ok=0x1</code> confirmed no regression from the
     <code>udp_receive()</code> <code>yield()</code> addition.
-    <code>objs</code> returns cleanly after every run. Deliberately
-    narrow: ping and DNS only - no async ARP/UDP/TCP for ring3 yet, and
-    those protocols still have no ring3-facing syscall at all.
+    <code>objs</code> returns cleanly after every run.
+</p>
+<p>
+    A full TCP fetch (real handshake, one request segment, a receive
+    loop, and a best-effort close) is exposed the same way, as one
+    atomic async operation rather than a raw connect/send/recv/close
+    socket API - matching <code>tcp_fetch()</code>'s own existing
+    all-in-one shape, the same "narrowest safe first version" every
+    protocol layer in this kernel has used from the start. It gets its
+    own <em>separate</em> pool and worker task
+    (<code>proc/net_tcp_request.c</code>) from ping/DNS's: a full fetch
+    can run several times longer (the handshake and the receive loop
+    each carry their own ~2000-3000 tick internal budget) than a single
+    ping/DNS round trip, so sharing a worker would let a slow fetch
+    stall a pending ping or DNS request. Syscall 24,
+    <code>net_tcp_fetch_async</code>, packs the target IP and port into
+    one argument and copies the request payload into the slot's own
+    kernel buffer (256-byte cap) at issue time; syscall 25,
+    <code>net_tcp_fetch_wait</code>, blocks via the same generic
+    wake-condition mechanism and copies the response (512-byte cap,
+    matching the existing kernel-mode <code>tcp</code> demo's own) into
+    the caller's own buffer. Adding this blocking primitive needed zero
+    changes to <code>sched/task.h</code> at all - the generic
+    <code>waiting_on</code> mechanism (see <a href="#scheduler">Scheduler</a>)
+    already covered it. <code>net/tcp.c</code>'s <code>tcp_wait_segment()</code>
+    got the same cooperative-<code>yield()</code> treatment every other
+    network wait loop already has, for the same reason.
+</p>
+<p>
+    The two async network operations compose, too: a process can
+    resolve a hostname asynchronously, then feed the result straight
+    into an async TCP fetch. Verified in QEMU, twice: the boot-time
+    demo process resolves <code>example.com</code> asynchronously,
+    then issues an async fetch of the resolved address with a real
+    HTTP/1.1 GET request - 5 rounds of real work land before the
+    fetch's own wait unblocks, and the result both times is a complete,
+    real <code>HTTP/1.1 200 OK</code> response with real headers from a
+    real internet host (<code>response_len=0x200</code>, matching the
+    existing kernel-mode demo's own cap exactly). <code>objs</code>
+    returns cleanly afterward both runs, and the DNS handle's slot was
+    confirmed genuinely freed and reused for the TCP request
+    immediately after (both landed on handle <code>0x2</code>).
+</p>
+<p>
+    One thing noticed during this work, not a regression: running the
+    kernel-mode <code>tcp</code> command right after an async fetch to
+    the same DNS-resolved address failed fast
+    (<code>elapsed_ticks=0x3</code>, clearly not a real timeout) -
+    traced to hitting the exact same remote IP twice in a row with this
+    kernel's already-documented fixed single local port
+    (<code>LOCAL_PORT=43981</code>, no connection table - see
+    <a href="#limitations">Known limitations</a>). Confirmed pre-existing
+    and unrelated to the async work: two back-to-back <em>synchronous</em>
+    kernel-mode <code>tcp</code> fetches succeeded cleanly when DNS
+    round-robin happened to hand them two different remote IPs.
+    Deliberately narrow overall: ping, DNS, and TCP fetch only - no
+    async ARP or raw UDP for ring3, and neither protocol needs its own
+    ring3-facing syscall the way ping/DNS/TCP did, since both already
+    sit underneath them.
 </p>
 
 <h2 id="syscalls">The ring0/ring3 boundary &amp; syscall ABI</h2>
@@ -1076,7 +1132,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>channel</code> and <code>process</code> handles are real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one. <code>unregister_service</code> (see <a href="#process-model">Process model &amp; isolation</a>) shares this same gap: any process can unregister any runtime service slot, not just the one it registered.</li>
 <li><strong>A handle another process holds to a still-running process can be released early</strong> (<code>handle_close</code>) and everything tied to an exited process is reclaimed (frames, process/task slot, kernel object table) — see <a href="#process-model">Process model &amp; isolation</a> for the full mechanism. <strong>Still open</strong>: any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the pointer-ownership gap above.</li>
 <li><strong><code>init.c</code> restarts its one service exactly once per cycle</strong>, not in an unbounded loop — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills.</li>
-<li><strong>Async file I/O (see <a href="#async-io">Async file I/O</a>) is backed by a fixed pool of 4 pending-request slots with a 512-byte buffer each</strong> — an operation larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. <strong>Async networking (see <a href="#async-net">Async networking</a>) covers ICMP ping and DNS A-record resolution only</strong>, from a separate 2-slot pool shared between the two — no async ARP/UDP/TCP for ring3 yet, and those protocols still have no ring3-facing syscall at all (they remain kernel-mode shell commands only).</li>
+<li><strong>Async file I/O (see <a href="#async-io">Async file I/O</a>) is backed by a fixed pool of 4 pending-request slots with a 512-byte buffer each</strong> — an operation larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. <strong>Async networking (see <a href="#async-net">Async networking</a>) covers ICMP ping, DNS resolve, and TCP fetch</strong> — ping/DNS share a 2-slot pool, TCP fetch has its own 2-slot pool with a 256-byte request cap and a 512-byte response cap. No async ARP or raw UDP for ring3, and neither has a ring3-facing syscall at all. Async TCP fetch inherits every limitation the existing kernel-mode <code>tcp</code> client already has (see below) — in particular, its fixed single local port means two fetches to the same remote address close together, async or sync or a mix, can collide and fail; this isn't new to async, just newly easy to trigger by composing operations quickly.</li>
 <li><strong>A loaded ring3 program's own code+data image is fully executable</strong> (no W^X split within it — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so NX protection, which does cover every dynamically-mapped pure-data region including every ring3 process's own user stack, can't be applied within a loaded image itself; see <a href="#memory-protection">Memory protection</a>). ASLR and true process sandboxing (beyond the address-space isolation this kernel already has) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
