@@ -16,7 +16,7 @@
     <a class="navlink" href="guide.html">Shell Guide</a>
     <a class="navlink" href="reference.html">Architecture</a>
     <a class="navlink active" href="examples.html">Walkthrough</a>
-    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="roadmap.html">Capabilities</a>
     <a class="navlink" href="download.html">Download</a>
     <span class="spacer"></span>
     <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
@@ -226,47 +226,42 @@ sent ring3 spawn trigger</code></pre>
     now independently <em>discovered</em> instead of assumed),
     <code>0x1234:0x1111</code> (the Bochs/QEMU standard VGA device), and
     <code>0x8086:0x100e</code> — a real Intel e1000 gigabit NIC, found
-    with zero extra QEMU flags and the target device for the next Phase X
-    milestone. Getting a wrong answer here (a garbage vendor ID, a
-    missing or extra device) would be immediately checkable against
-    public PCI ID databases — the same "a wrong answer is obviously
-    wrong" property every milestone's verification here has looked for
-    since milestone 1.
+    with zero extra QEMU flags. Getting a wrong answer here (a garbage
+    vendor ID, a missing or extra device) would be immediately checkable
+    against public PCI ID databases — the same "a wrong answer is
+    obviously wrong" property every proof in this walkthrough looks for.
 </p>
 
 <h2>A real e1000 NIC driver</h2>
 <p>
-    <code>nic</code> is milestone 30's proof, and its strength is the
-    same shape as <code>pci</code>'s: checkable against a value this
-    kernel had no part in producing. <code>52:54:00:12:34:56</code> is
-    QEMU's own well-known, publicly documented default NIC MAC address —
-    reading it back correctly means <code>net/e1000.c</code> genuinely
-    enabled the device over PCI, correctly found and mapped its real
-    physical MMIO register file (not RAM — the first device-register
-    mapping this kernel has ever done), and pulled real hardware state
-    out of it (<code>RAL0</code>/<code>RAH0</code>, pre-loaded by QEMU's
-    own emulated EEPROM). A broken mapping, a wrong BAR, or garbage
-    register reads would have produced a zeroed or nonsense MAC instead
-    — immediately, independently wrong, not just "the command didn't
-    crash." <code>link_up=0x1</code> is a second, separate piece of real
-    hardware state confirming the same thing. No packet has been sent or
-    received yet — this milestone proves the driver can talk to the
-    hardware, deliberately not more than that.
+    <code>nic</code>'s strength is the same shape as <code>pci</code>'s:
+    checkable against a value this kernel had no part in producing.
+    <code>52:54:00:12:34:56</code> is QEMU's own well-known, publicly
+    documented default NIC MAC address — reading it back correctly means
+    <code>net/e1000.c</code> genuinely enabled the device over PCI,
+    correctly found and mapped its real physical MMIO register file (not
+    RAM), and pulled real hardware state out of it (<code>RAL0</code>/
+    <code>RAH0</code>, pre-loaded by QEMU's own emulated EEPROM). A
+    broken mapping, a wrong BAR, or garbage register reads would have
+    produced a zeroed or nonsense MAC instead — immediately,
+    independently wrong, not just "the command didn't crash."
+    <code>link_up=0x1</code> is a second, separate piece of real hardware
+    state confirming the same thing. No packet has been sent or received
+    yet — this command proves the driver can talk to the hardware,
+    deliberately not more than that.
 </p>
 
 <h2>A real ARP resolver</h2>
 <p>
-    <code>arp</code> is milestone 32's proof, exercising the real
-    <code>net/arp.c</code> resolver instead of milestone 31's own
-    hardcoded one-shot flow — four separate, independently checkable
-    claims in one command. <code>resolve gateway ok=0x1
-    mac=52:55:0a:00:02:02</code> is a genuine external round trip, the
-    same shape milestone 31 first proved, now through the real API:
-    QEMU's SLIRP backend, running entirely outside this kernel, received
-    a real ARP request and replied with its own well-known, publicly
-    documented default gateway MAC. <code>elapsed_ticks=0x64</code> (100
-    ticks) is real, non-trivial wall-clock time — an actual network round
-    trip took a measurable amount of it.
+    <code>arp</code> exercises the real <code>net/arp.c</code>
+    resolver — four separate, independently checkable claims in one
+    command. <code>resolve gateway ok=0x1 mac=52:55:0a:00:02:02</code> is
+    a genuine external round trip through the real API: QEMU's SLIRP
+    backend, running entirely outside this kernel, received a real ARP
+    request and replied with its own well-known, publicly documented
+    default gateway MAC. <code>elapsed_ticks=0x64</code> (100 ticks) is
+    real, non-trivial wall-clock time — an actual network round trip
+    took a measurable amount of it.
 </p>
 <p>
     <code>cached_ok=0x1 cached_elapsed_ticks=0x0</code> is the real proof of
@@ -280,8 +275,7 @@ sent ring3 spawn trigger</code></pre>
     address — QEMU SLIRP's own built-in DNS proxy — and gets back a
     genuinely different MAC that follows the exact same publicly
     documented SLIRP convention (embedding the IP's last three octets),
-    proving the resolver generalizes past the one fixed address
-    milestone 31 ever exercised.
+    proving the resolver generalizes past a single fixed address.
 </p>
 <p>
     <code>resolve_unreachable_ok=0x0</code> is the negative-space proof:
@@ -294,16 +288,16 @@ sent ring3 spawn trigger</code></pre>
 
 <h2>A real IP layer</h2>
 <p>
-    <code>ping</code> is milestone 33's proof — a genuine ICMP echo round
-    trip through the full stack built so far: ARP resolution, real IPv4
-    header construction, a real checksum, and a real Ethernet send/
-    receive, all in one command. <code>ok=0x1</code> means
-    <code>net/icmp.c</code>'s <code>icmp_ping()</code> got back a reply
-    that matched on <em>every</em> real, independently meaningful field —
-    the right EtherType, the right IP protocol number, the right source
-    IP, the right ICMP type (echo reply, not some other ICMP message),
-    and the exact identifier/sequence number this specific request sent —
-    not just "some ICMP traffic arrived."
+    <code>ping</code> is a genuine ICMP echo round trip through the full
+    network stack: ARP resolution, real IPv4 header construction, a real
+    checksum, and a real Ethernet send/receive, all in one command.
+    <code>ok=0x1</code> means <code>net/icmp.c</code>'s
+    <code>icmp_ping()</code> got back a reply that matched on
+    <em>every</em> real, independently meaningful field — the right
+    EtherType, the right IP protocol number, the right source IP, the
+    right ICMP type (echo reply, not some other ICMP message), and the
+    exact identifier/sequence number this specific request sent — not
+    just "some ICMP traffic arrived."
 </p>
 <p>
     A wrong IP header (a bad checksum, a malformed field) would most
@@ -311,32 +305,28 @@ sent ring3 spawn trigger</code></pre>
     host-level network stack rather than answered at all, so the reply
     arriving at all is itself strong indirect evidence the header was
     built correctly — the same "external validation beats
-    self-validation" property every proof in this networking phase has
-    looked for. <code>elapsed_ticks=0x64</code> matches the same real,
+    self-validation" property every networking proof in this walkthrough
+    looks for. <code>elapsed_ticks=0x64</code> matches the same real,
     non-trivial round-trip time <code>arp</code> measured moments
-    earlier — consistent, not coincidental, real network latency.
-</p>
-<p>
-    This is also the first milestone in this whole project to give the
-    kernel a real, explicit "my IP address" (<code>net/ip.c</code>'s
-    <code>g_my_ip</code>) — previously a bare literal duplicated inside
-    <code>arp.c</code>'s own request-building code, now one shared,
-    named value both files use.
+    earlier — consistent, not coincidental, real network latency. This
+    is also where the kernel gets a real, explicit "my IP address"
+    (<code>net/ip.c</code>'s <code>g_my_ip</code>) — one shared, named
+    value both <code>ip.c</code> and <code>arp.c</code> use, rather than
+    a bare literal duplicated in each.
 </p>
 
 <h2>A real UDP layer</h2>
 <p>
-    <code>dns</code> is milestone 34's proof — a real UDP datagram,
-    correctly checksummed against its own pseudo-header, carrying a
-    genuine DNS query to QEMU SLIRP's built-in resolver proxy
-    (<code>10.0.2.3</code>, the same address <code>arp</code> already
-    resolved back in milestone 32). <code>ok=0x1</code> means
-    <code>net/dns.c</code>'s <code>dns_query()</code> got back a response
-    matching the exact transaction ID this query sent, with the response
-    (QR) bit set, and at least one real answer record — meaning SLIRP's
-    proxy genuinely forwarded the query to a real upstream resolver and
-    got a real answer back, not something this kernel could produce on
-    its own.
+    <code>dns</code> sends a real UDP datagram, correctly checksummed
+    against its own pseudo-header, carrying a genuine DNS query to QEMU
+    SLIRP's built-in resolver proxy (<code>10.0.2.3</code>, the same
+    address <code>arp</code> already resolved above). <code>ok=0x1</code>
+    means <code>net/dns.c</code>'s <code>dns_query()</code> got back a
+    response matching the exact transaction ID this query sent, with the
+    response (QR) bit set, and at least one real answer record — meaning
+    SLIRP's proxy genuinely forwarded the query to a real upstream
+    resolver and got a real answer back, not something this kernel could
+    produce on its own.
 </p>
 <p>
     <code>elapsed_ticks=0x74</code> (116 ticks) is itself a meaningful
@@ -416,8 +406,8 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
     its own <code>_start()</code> from scratch in its own freshly cloned
     address space, with its own distinct task index (<code>0x9</code>, not
     the parent's <code>0x7</code>) and its own independent handle table.
-    As of milestone 27 it's genuinely interleaved with the parent's own
-    remaining code, not simply "runs after" — a real preemptive scheduler
+    It's genuinely interleaved with the parent's own remaining code, not
+    simply "runs after" — a real preemptive scheduler
     doesn't guarantee which one runs first, which is why the child's
     first print lands before the parent's own <code>Process.spawn()
     launched...</code> line in this particular capture. What doesn't vary
@@ -433,22 +423,20 @@ unauthorized Channel.send() succeeded=0x0</code></pre>
 <p>
     <code>ProcessHandle.open(rights=0) ok=0x1</code> through
     <code>authorized ProcessHandle.query() got task_index 0x9</code> are
-    milestone 27's proof, run by the <em>parent</em> right after
-    <code>Process.spawn()</code>, targeting the child it just launched.
-    Requesting zero rights still yields a real, valid handle
-    (<code>ok=0x1</code>) — a handle's existence and its rights are two
-    separate things, same as milestone 25 established for
-    <code>Channel</code>. The next line is the actual point: querying
-    through that rights-less handle is correctly rejected. A second
-    handle, this time requesting <code>RIGHT_QUERY</code>, succeeds — and
-    its query returns <code>0x9</code>, the exact task_index
-    <code>Process.spawn()</code> already reported two lines earlier, an
-    independent cross-check rather than a hardcoded echo. The
-    <code>handle 0 (self) -&gt; task_index 0x9</code> line in between is the
-    child's own pre-existing self-query (rights-granted since milestone
-    14, actually verified for the first time here) — still correct,
-    confirming the newly-real check doesn't break the one path already
-    depending on it.
+    run by the <em>parent</em> right after <code>Process.spawn()</code>,
+    targeting the child it just launched. Requesting zero rights still
+    yields a real, valid handle (<code>ok=0x1</code>) — a handle's
+    existence and its rights are two separate things, same as
+    <code>Channel</code>'s own handles. The next line is the actual
+    point: querying through that rights-less handle is correctly
+    rejected. A second handle, this time requesting
+    <code>RIGHT_QUERY</code>, succeeds — and its query returns
+    <code>0x9</code>, the exact task_index <code>Process.spawn()</code>
+    already reported two lines earlier, an independent cross-check
+    rather than a hardcoded echo. The <code>handle 0 (self) -&gt;
+    task_index 0x9</code> line in between is the child's own
+    pre-existing self-query — still correct, confirming the rights
+    check doesn't break the one path already depending on it.
 </p>
 <p>
     (The child's own <code>File.write()</code> shows the "already exists"
@@ -472,9 +460,9 @@ Channel.receive() got trigger 0x2
 attempting forbidden ring3 write to 0x100000
 page fault at 0x100000, error_code=0x7, halting</code></pre>
 <p>
-    This is milestone 26's actual proof. <code>attempting forbidden ring3
-    write to 0x100000</code> confirms the process really reached the write
-    attempt; the very next line the source would have printed on success —
+    <code>attempting forbidden ring3 write to 0x100000</code> confirms
+    the process really reached the write attempt; the very next line
+    the source would have printed on success —
     <code>"forbidden write succeeded (BUG!) at 0x..."</code> — never
     appears, because the CPU faulted on the write itself before that
     syscall could even be staged. <code>page fault at 0x100000,
@@ -483,21 +471,20 @@ page fault at 0x100000, error_code=0x7, halting</code></pre>
     from CR2, not anything the ring3 process reported about itself) —
     <code>0x100000</code>, the kernel's own multiboot load address, inside
     the shared region every address space carries but never something
-    this process mapped for itself. Before this milestone's fix, the same
-    command printed the "(BUG!)" line and kept running, the write landing
-    silently in live kernel memory — the absence of that line, replaced
-    by a fault at exactly the address written to, is what makes this a
-    real negative-space proof. <code>error_code=0x7</code> (present + write
-    + user — milestone 28's addition to this handler) confirms it
-    specifically as a write violation, worth comparing directly against
-    the NX proof below.
+    this process mapped for itself. Without this protection in place,
+    the same command would print the "(BUG!)" line and keep running, the
+    write landing silently in live kernel memory — the absence of that
+    line, replaced by a fault at exactly the address written to, is what
+    makes this a real negative-space proof. <code>error_code=0x7</code>
+    (present + write + user) confirms it specifically as a write
+    violation, worth comparing directly against the NX proof below.
 </p>
 
 <h2>A deliberate stack-execution attempt</h2>
 <p>
-    <code>ring3nx</code> is milestone 28's proof — same one-shot,
-    kernel-halting shape as <code>ring3fault</code>, a third trigger value
-    on the same channel. Instead of writing to forbidden kernel memory,
+    <code>ring3nx</code> has the same one-shot, kernel-halting shape as
+    <code>ring3fault</code>, a third trigger value on the same channel.
+    Instead of writing to forbidden kernel memory,
     the boot-time process writes a real <code>ret</code> opcode
     (<code>0xC3</code>) onto its <em>own</em> user stack and attempts to
     execute it:
@@ -527,9 +514,9 @@ page fault at 0x80020000, error_code=0x15, halting</code></pre>
 
 <footer>
     MiniC OS is a hobby kernel project, hand-written in freestanding C
-    (originally built in MiniC through milestone 34 — see the
-    <a href="roadmap.html">Roadmap</a>). Source on
-    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+    (originally built in a language called MiniC, then rewritten by hand
+    into C — see the <a href="roadmap.html">Capabilities</a> page).
+    Source on <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 
 </body>

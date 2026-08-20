@@ -16,7 +16,7 @@
     <a class="navlink" href="guide.html">Shell Guide</a>
     <a class="navlink active" href="reference.html">Architecture</a>
     <a class="navlink" href="examples.html">Walkthrough</a>
-    <a class="navlink" href="roadmap.html">Roadmap</a>
+    <a class="navlink" href="roadmap.html">Capabilities</a>
     <a class="navlink" href="download.html">Download</a>
     <span class="spacer"></span>
     <a class="gh" href="https://github.com/milosursulovic/minic-os">GitHub ↗</a>
@@ -35,14 +35,11 @@
     switching.
 </p>
 <div class="note">
-    Milestones 1 through 34 (everything through the networking phase) were
-    built in MiniC, a small hand-rolled language with its own compiler.
-    Right after milestone 34 shipped, the whole kernel was rewritten by
-    hand into freestanding C for faster day-to-day development — the
-    architecture, milestones, and verification bar didn't change, only the
-    implementation language did. See the
-    <a href="roadmap.html">Roadmap</a> for that rewrite as a real, dated
-    entry. This page describes the kernel's <strong>current</strong> C
+    This kernel was originally built in MiniC, a small hand-rolled
+    language with its own compiler, then rewritten by hand into
+    freestanding C for faster day-to-day development — the architecture
+    and verification bar didn't change, only the implementation language
+    did. This page describes the kernel's <strong>current</strong> C
     implementation throughout.
 </div>
 
@@ -101,8 +98,7 @@
     whole-program merge the way MiniC's own <code>import</code> did, so
     each file's public surface is declared in its own header (wrapped in
     <code>#pragma GCC visibility push(hidden)</code>/<code>pop</code>, see
-    <a href="#boot">above</a>). Milestone annotations below are real,
-    historical MiniC-era ship dates — the files themselves are C today.
+    <a href="#boot">above</a>).
 </p>
 <pre><code>types.h           shared typedefs (u8/u16/u32/u64/bool/...)
 kmain.c           entry point (_start) + the #includes wiring everything together
@@ -111,35 +107,28 @@ boot/             hand-written assembly - below what a C function can express
   interrupts.s       ISR/IRQ entry stubs (save/restore, call into C)
   linker.ld          places the multiboot header + code at the 1MB load address
 drivers/          hardware setup and I/O
-  io.c/.h            VGA text buffer, serial port, raw in/out port I/O.
-                     outl/inl (32-bit) added milestone 29 for PCI config
-                     space, which is dword-addressed
+  io.c/.h            VGA text buffer, serial port, raw in/out port I/O,
+                     including 32-bit outl/inl for PCI config space (dword-addressed)
   interrupts_init.c/.h IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.c/.h      scancode table + the shell's line buffer
-  pci.c/.h           milestone 29 (Phase X's first step): PCI bus
-                     enumeration via CONFIG_ADDRESS/CONFIG_DATA, bus 0 only.
-                     Milestone 30: pci_config_write_dword() (first PCI config
-                     WRITE) and pci_read_bar0()
-net/              networking (milestone 30 onward)
+  pci.c/.h           PCI bus enumeration via CONFIG_ADDRESS/CONFIG_DATA
+                     (bus 0 only), plus config-space writes and BAR reads
+net/              networking
   e1000.c/.h         the e1000 NIC driver - PCI enable, MMIO register
-                     mapping, real MAC/link-status readback. Milestone
-                     31: real TX/RX descriptor rings, a genuine packet
-                     round trip verified via a hand-crafted ARP request
-  arp.c/.h           milestone 32: a real ARP resolver - a genuine
-                     cache, arp_resolve() for any target address, client
+                     mapping, real MAC/link-status readback, real TX/RX
+                     descriptor rings
+  arp.c/.h           a real ARP resolver - a genuine cache,
+                     arp_resolve() for any target address, client
                      (resolver) only, no responder
-  ip.c/.h            milestone 33: real IPv4 header build + the RFC 791
-                     checksum, and g_my_ip - this kernel's own first
-                     concept of "my IP address" (still static, no DHCP)
-  icmp.c/.h          milestone 33: icmp_ping() - a real echo request/
-                     reply round trip, the verification vehicle for the
-                     IP layer the same way ARP was for TX/RX
-  udp.c/.h           milestone 34: real UDP - udp_checksum() (the real
-                     pseudo-header algorithm), udp_send()/udp_receive()
-  dns.c/.h           milestone 34: dns_query() - a minimal, hand-crafted
-                     DNS query, the verification vehicle for UDP the
-                     same way ICMP's ping was for IP. Not a real DNS
-                     client
+  ip.c/.h            real IPv4 header build + the RFC 791 checksum, and
+                     g_my_ip - this kernel's own concept of "my IP
+                     address" (still static, no DHCP)
+  icmp.c/.h          icmp_ping() - a real echo request/reply round trip
+  udp.c/.h           real UDP - udp_checksum() (the real pseudo-header
+                     algorithm), udp_send()/udp_receive()
+  dns.c/.h           dns_query()/dns_resolve_a() - a minimal,
+                     hand-crafted DNS query and A-record resolver, not a
+                     real general-purpose DNS client
 mm/               memory management
   heap.c/.h          kalloc/kfree free-list allocator, grows on demand
   frames.c/.h        multiboot memory map parser + physical frame allocator
@@ -176,8 +165,8 @@ shell/            the interactive shell
 <tr><td><code>0x80000000</code>+ (PDPT[2] and up)</td><td>each process's <strong>private</strong> region — not present by default in a freshly cloned address space, populated on demand only by whichever task owns that PML4. This is where a loaded ring3 process's own code/data (<code>0x80000000</code>) and user stack (<code>0x80020000</code>) live.</td></tr>
 </table>
 <div class="note">
-    As of milestone 26, a <em>cloned</em> (ring3-capable) address space's
-    copy of PDPT[0]/PDPT[1] has the user bit stripped — a ring3 process
+    A <em>cloned</em> (ring3-capable) address space's copy of
+    PDPT[0]/PDPT[1] has the user bit stripped — a ring3 process
     can no longer read/write/execute this region directly, only through a
     syscall (which raises CPL to 0 first). See
     <a href="#memory-protection">Memory protection</a> below.
@@ -241,232 +230,114 @@ shell/            the interactive shell
     allocation into it always takes slot 0).
 </p>
 <p>
-    Milestone 36 adds a third way to spawn a process alongside the two
-    above: <code>spawn_builtin</code> (syscall 11) lets a ring3 process
-    spawn <em>another</em> ring3 process from a small, fixed,
-    kernel-embedded program registry, addressed by index rather than a
-    raw pointer or a filesystem path. This is what <code>proc/init.c</code>
-    — the kernel's first real init process, spawned by <code>kmain.c</code>
-    at boot the same way the existing demo process always has been —
-    uses to launch <code>proc/hello_service.c</code> without needing the
-    filesystem to have anything on it yet (a fresh <code>disk.img</code>
-    is empty until <code>mkfs</code>+<code>install</code> run manually).
-    The registry is intentionally not a raw-pointer API: letting ring3
-    code name an arbitrary address as "a program to run" would undo the
-    real work the capability/rights phase (milestones 25-27) put into
+    A third way to spawn a process sits alongside the two above:
+    <code>spawn_builtin</code> (syscall 11) lets a ring3 process spawn
+    <em>another</em> ring3 process from a program registry addressed by
+    index rather than a raw pointer or a filesystem path — one fixed,
+    kernel-embedded entry (<code>hello_service.c</code>), plus up to 4
+    runtime-registered slots (see below). This is what
+    <code>proc/init.c</code> — the kernel's first real init process,
+    spawned by <code>kmain.c</code> at boot the same way the existing
+    demo process always has been — uses to launch
+    <code>proc/hello_service.c</code> without needing the filesystem to
+    have anything on it yet (a fresh <code>disk.img</code> is empty
+    until <code>mkfs</code>+<code>install</code> run manually). The
+    registry is intentionally not a raw-pointer API: letting ring3 code
+    name an arbitrary address as "a program to run" would undo the real
+    work the capability/rights model elsewhere in this kernel puts into
     making sure ring3 code can only ever act through something the
-    kernel already vetted.
+    kernel already vetted. <code>register_service</code> (syscall 14)
+    lets a ring3 process load a VFS file into one of those 4 runtime
+    slots at runtime and get back an index <code>spawn_builtin</code>
+    can address the same way as the fixed entry;
+    <code>unregister_service</code> (syscall 15) frees a slot for
+    genuine reuse — verified by registering, unregistering, confirming
+    a subsequent <code>spawn_builtin</code> on that index now correctly
+    fails, then registering again and getting back the exact same index
+    before spawning it successfully. Registering/unregistering a slot
+    never affects a process already spawned from it, since
+    <code>spawn_process()</code> copies the image into the new
+    process's own address space at spawn time rather than referencing
+    the registry slot afterward. Deliberately doesn't track which
+    process registered a slot, so any process can unregister any slot —
+    matches this kernel's existing pointer-ownership gap (see
+    <a href="#limitations">Known limitations</a>) rather than closing
+    it.
 </p>
 <p>
-    Milestone 37 adds the other half of a process's real lifecycle:
-    <code>process_exit</code> (syscall 12) lets the calling task mark its
-    own task and process table slots as no-longer-alive, then yield away
-    for the last time. <code>sched/task.c</code>'s scheduler scan
-    permanently skips a slot marked this way — the exact same shape it
-    already uses to skip a temporarily blocked task, just with no wake
-    condition that will ever fire. <code>task.used</code>/<code>process.used</code>
-    turned out to already exist as fields but be entirely write-only
-    (set true at creation, never read anywhere) before this milestone —
-    giving them their first real meaning needed no new fields at all.
-    Deliberately does <strong>not</strong> reclaim the exited process's
-    resources: its frames stay mapped, its table slot stays occupied
-    forever, and any handle still pointing at it stays valid but now
-    points at something that will never run again — real, separate
-    follow-on work, not an oversight. <code>proc/hello_service.c</code>
-    now calls <code>process_exit()</code> right after its own startup
-    message instead of idling forever, and the <code>ps</code> shell
-    command gained an <code>exited=0x</code> field per process so this
-    is directly observable — a fresh boot shows the boot-time demo and
-    init both <code>exited=0x0</code> while hello_service alone shows
+    A process's real lifecycle closes with <code>process_exit</code>
+    (syscall 12): the calling task marks its own task and process table
+    slots as no-longer-alive, then yields away for the last time.
+    <code>sched/task.c</code>'s scheduler scan permanently skips a slot
+    marked this way — the exact same shape it already uses to skip a
+    temporarily blocked task, just with no wake condition that will
+    ever fire. <code>proc/hello_service.c</code> calls
+    <code>process_exit()</code> right after its own startup message
+    instead of idling forever, and the <code>ps</code> shell command's
+    <code>exited=0x</code> field per process makes this directly
+    observable — a fresh boot shows the boot-time demo and init both
+    <code>exited=0x0</code> while hello_service alone shows
     <code>exited=0x1</code>, immediately and every time.
 </p>
 <p>
-    Milestone 38 closes the loop: <code>init.c</code> now opens a
-    <code>ProcessHandle</code> to its spawned service and busy-polls its
-    query (syscall 3) until it fails, then spawns a fresh instance -
-    real restart-on-exit, not just spawn-and-forget. That needed a real
-    fix: syscall 3 previously resolved an <code>OBJ_PROCESS</code>
-    handle straight to a <code>task_index</code> with no check on
-    whether the target had actually exited, so querying a handle to an
-    already-dead process silently returned a stale <code>task_index</code>
-    instead of failing - fixed with a one-line check against
-    <code>g_processes[proc_idx].used</code>. Deliberately restarts only
-    once: the process table is a fixed 4 slots, already full after the
-    demo, init, and two <code>hello_service</code> instances, and there's
-    still no resource reclamation on exit for a real looping supervisor
-    to rely on. No yield/sleep syscall exists for ring3 yet, so the poll
-    busy-spins - acceptable here since <code>hello_service</code> exits
-    almost immediately.
+    Exiting genuinely reclaims everything tied to the process rather
+    than just marking it dead. A <code>mm/paging.c</code> function,
+    <code>free_address_space(pml4_phys)</code>, walks the exiting
+    process's own page tables (<code>PDPT[2..511] -&gt; PD -&gt; PT</code> -
+    the private per-process region; <code>PDPT[0]</code>/<code>[1]</code>,
+    the shared kernel/heap sub-tables, are never touched), freeing every
+    present leaf frame plus the PT/PD frames themselves, then the
+    process's own PDPT and PML4 frames. Safe to call from inside
+    <code>process_exit()</code> even though it tears down the caller's
+    own address space: the syscall runs in kernel mode on the shared
+    identity map throughout, and CR3 only actually moves off the freed
+    PML4 once <code>yield()</code>'s own <code>load_cr3()</code> runs
+    immediately after. Verified with real diagnostic prints of
+    <code>g_free_frame_count</code> around the free: repeated exit
+    cycles return the free count to the identical baseline every time,
+    not drifting.
 </p>
 <p>
-    Milestone 39 gives <code>process_exit</code> real teeth: a new
-    <code>mm/paging.c</code> function, <code>free_address_space(pml4_phys)</code>,
-    walks the exiting process's own page tables (<code>PDPT[2..511] -&gt;
-    PD -&gt; PT</code> - the private per-process region; <code>PDPT[0]</code>/
-    <code>[1]</code>, the shared kernel/heap sub-tables, are never
-    touched), freeing every present leaf frame plus the PT/PD frames
-    themselves, then the process's own PDPT and PML4 frames. Safe to
-    call from inside <code>process_exit()</code> even though it tears
-    down the caller's own address space: the syscall runs in kernel
-    mode on the shared identity map throughout, and CR3 only actually
-    moves off the freed PML4 once <code>yield()</code>'s own
-    <code>load_cr3()</code> runs immediately after. Still not reclaimed:
-    the process/task table <em>slot</em> itself, and the task's own
-    kalloc'd kernel stack (freeing your own currently-executing stack
-    from within itself is a genuinely riskier problem than freeing
-    memory you're not standing on). Verified with real diagnostic prints
-    of <code>g_free_frame_count</code> around the free (added, used to
-    get exact numbers, then removed): both of hello_service's exit
-    cycles returned the free count to the identical baseline, and
-    <code>ps</code> showed the second spawn's <code>cr3</code> was
-    bit-for-bit the same physical frame the first spawn's exit had just
-    freed - real reuse, not coincidence.
+    The process/task table slot itself is also reused: <code>spawn_process()</code>
+    and <code>create_task_with_cr3()</code> search for an exited slot
+    before appending, so the table no longer only ever grows.
+    <code>create_task_with_cr3()</code> returns the real task index (or
+    -1 on failure) rather than a bare success/fail flag, since a reused
+    slot's index can't be inferred as "whatever the counter currently
+    is" the way an always-appended one could. A reused task slot reuses
+    its <em>old</em> kalloc'd kernel stack directly rather than
+    allocating a fresh one - just reinitializes the fake switch-frame at
+    the top of the same block - sidestepping "freeing your own
+    currently-executing stack from within itself" entirely instead of
+    solving it, and meaning reuse doesn't leak heap memory either.
+    Verified in QEMU: the same <code>task_index</code>/<code>cr3</code>
+    come back for a restart every time, and <code>ps</code> never grows
+    past the real process count across repeated spawn/exit cycles.
 </p>
 <p>
-    Milestone 40 closes the remaining gap: <code>spawn_process()</code>
-    and <code>create_task_with_cr3()</code> now search for an exited
-    slot before appending, so the process/task table no longer only
-    ever grows. <code>create_task_with_cr3()</code> changed from
-    <code>bool</code> to <code>int</code> (the real task index, or -1) -
-    a reused slot's index can't be inferred as "whatever the counter
-    currently is" the way an always-appended one could. That surfaced
-    two real, previously-latent bugs: a pre-computed
-    <code>task_index = g_task_count</code> in <code>process.c</code>
-    would have used the wrong index once reuse landed, and
-    <code>create_isolated_task()</code>'s bare
-    <code>return create_task_with_cr3(...)</code> implicitly converted
-    <code>-1</code> (failure) to <code>true</code> (nonzero is truthy) -
-    silently reporting success on failure. Both fixed by using the real
-    returned index. A reused task slot reuses its <em>old</em> kalloc'd
-    kernel stack directly rather than allocating a fresh one - just
-    reinitializes the fake switch-frame at the top of the same block -
-    sidestepping "freeing your own currently-executing stack from
-    within itself" entirely instead of solving it, and meaning reuse
-    doesn't leak heap memory either. <code>spawn_process()</code> also
-    clears the reused slot's handle table first, since a stale "handle
-    0" from the previous occupant would otherwise break the "handle 0 =
-    myself" convention for the new one.
-</p>
-<p>
-    A real regression was found and fixed during this milestone's own
-    testing, never shipped: an early version had <code>init</code>
-    restart <code>hello_service</code> 2-3 times in a loop for a more
-    dramatic reuse proof, but each restart also costs a
-    <code>g_objects[8]</code> slot for the query handle - looping that
-    aggressively exhausted the shared, still-unreclaimed object table
-    and broke the <em>original</em> boot-time demo process's own
-    unrelated <code>Channel.open()</code> call, cascading into several
-    other spurious failures downstream. Reverted to a single restart,
-    which already proves reuse cleanly (the same <code>task_index</code>
-    comes back every time) without touching that shared budget any
-    harder than milestone 38 already did.
-</p>
-<p>
-    Milestone 41 fixes that regression at the root instead of just
-    scoping the demo back: <code>process_exit</code> now walks the
+    The exiting process's own kernel-object handle table is reclaimed
+    too, via <code>free_object()</code>/<code>free_handle()</code> in
+    <code>proc/object.c</code>: <code>process_exit</code> walks the
     exiting process's own handle table and frees every object it
-    referenced, via two new functions in <code>proc/object.c</code>,
-    <code>free_object()</code>/<code>free_handle()</code>.
-    <code>alloc_object()</code>/<code>alloc_handle()</code> already
-    scanned for a free slot before appending — they simply never had
-    anything freed to find until this milestone. This also makes
-    <code>spawn_process()</code>'s own milestone-40 handle-table-clearing
-    loop for a reused slot redundant, since the previous occupant's exit
-    now leaves the table clean already; that loop is removed. The scope
-    is deliberately narrow: a handle <em>another</em> process holds
-    <em>to</em> the exiting one — <code>init</code>'s own permanent
-    <code>open_process</code> handle onto <code>hello_service</code>,
-    for instance — lives in that other process's own table, not the
-    exiting process's, so exit doesn't touch it. There is also still no
-    <code>handle_close</code>-style syscall, so a process that opens
-    handles to others but never exits itself has no way to release them
-    early — a real, separate gap this milestone doesn't attempt. Verified
-    in QEMU: <code>objs</code> reports <code>0x4</code> after a full
-    spawn/exit/restart/exit cycle, matching hand arithmetic exactly (3
-    boot-time objects plus 1 permanent init-owned object), and re-running
-    the exact scenario that broke during milestone 40's own testing —
-    <code>install</code>+<code>spawn</code> alongside the hello_service
-    restart cycle — now shows <code>Channel.open() ok=0x1</code> restored,
-    confirming the fix, not just a narrower test.
-</p>
-<p>
-    Milestone 42 closes the narrower gap milestone 41 documented as
-    still open: a handle one process holds <em>to</em> another lives in
-    the <em>holder's</em> own table, not the target's, so the target's
-    own exit never frees it — only the holder explicitly releasing it,
-    or the holder itself exiting, can. New syscall 13,
-    <code>handle_close</code>, validates the handle belongs to the
-    caller and is currently in use, then calls the same
-    <code>free_object()</code>/<code>free_handle()</code> pair milestone
-    41 already added — no new reclaim mechanism, just a second entry
-    point into it that doesn't require exiting first. <code>init.c</code>
-    now closes its query handle onto <code>hello_service</code> after
-    each restart cycle and loops the restart <em>3 times</em> instead
-    of once — deliberately reproducing the exact aggressive-restart
-    scenario that exhausted <code>g_objects[8]</code> during milestone
-    40's own testing, before any reclaim existed. Verified in QEMU,
-    twice: <code>objs</code> reports <code>0x3</code> after all 3
-    restart rounds complete — bit-for-bit the clean-boot baseline,
-    proving 3 full rounds of open/query/close/restart leave zero net
-    object growth rather than just a smaller leak.
-</p>
-<p>
-    Milestone 43 closes the other item flagged as open after milestone
-    42: <code>spawn_builtin</code>'s registry has been fixed at compile
-    time since milestone 36, so a ring3 process could never make a new
-    program spawnable without a kernel rebuild — only spawn one already
-    baked in, or read one from a VFS path directly via
-    <code>spawn_process_from_path</code> (syscall 6), which bypasses the
-    registry's index-based capability model entirely. New syscall 14,
-    <code>register_service</code>, reads a VFS file into one of 4 fixed
-    16KB runtime registry slots and returns an index.
-    <code>builtin_program_bounds()</code> — already the one function
-    <code>spawn_builtin</code> consults, by index, never a raw pointer —
-    now checks those runtime slots after the one fixed compile-time
-    entry: index 0 stays reserved for <code>hello_service</code>,
-    indices 1+ map to registered slots. <code>spawn_builtin</code>
-    itself needed no changes at all — extending what
-    <code>builtin_program_bounds()</code> recognizes was the entire
-    feature. The boot-time demo process now exercises this on a fourth
-    channel trigger: it registers its own just-<code>install</code>ed
-    <code>/system/testprog.bin</code> at runtime, then
-    <code>spawn_builtin</code>s it, deliberately taking the new
-    index-based path instead of the already-proven VFS-path one.
-    Verified in QEMU, twice: <code>register_service()</code> returns
-    index <code>0x1</code> (the first dynamic slot) both times, and the
-    resulting process's own self-query independently reports the exact
-    same <code>task_index</code> <code>spawn_builtin</code> returned —
-    not an unverified echo — running its full File/POSIX/Channel
-    self-test sequence exactly like any other loaded instance.
-    Deliberately narrow: there's no <code>unregister_service</code>, so
-    the 4 registry slots are a lifetime cap per boot, not a reclaimable
-    resource the way every other table this kernel now reuses is.
-</p>
-<p>
-    Milestone 44 closes that gap: new syscall 15,
-    <code>unregister_service</code>, validates the index maps to a
-    currently-used runtime slot, then clears its used flag and length —
-    the same shape as milestone 41's <code>free_object()</code>/
-    <code>free_handle()</code>, just for this table. Deliberately
-    doesn't track which process registered a slot, so any process can
-    unregister any slot — matches this kernel's existing pointer-
-    ownership gap (see <a href="#limitations">Known limitations</a>)
-    rather than closing it, real separate work. Unregistering doesn't
-    affect a process already spawned from that slot:
-    <code>spawn_process()</code> copies the image into the new
-    process's own address space at spawn time, so nothing keeps
-    referencing the registry slot afterward. Verified in QEMU, twice:
-    <code>register_service()</code> returns <code>0x1</code>,
-    <code>unregister_service</code> on it succeeds
-    (<code>0x0</code>), a <code>spawn_builtin(0x1)</code> attempt right
-    after correctly fails (<code>-1</code>) confirming the slot is
-    genuinely freed rather than just marked, registering again returns
-    the <em>same</em> index <code>0x1</code> — real reuse, not a second
-    slot — and <code>spawn_builtin</code>ing that reused index launches
-    a real process whose own self-query matches. <code>objs</code>
-    still reads <code>0x5</code>, identical to milestone 43's own
-    baseline, confirming the register/unregister/re-register cycle
-    doesn't touch the unrelated kernel object table.
+    referenced. <code>alloc_object()</code>/<code>alloc_handle()</code>
+    already scanned for a free slot before appending — they simply
+    needed something freed to find. The scope is deliberately narrow: a
+    handle <em>another</em> process holds <em>to</em> the exiting one —
+    <code>init</code>'s own permanent <code>open_process</code> handle
+    onto <code>hello_service</code>, for instance — lives in that other
+    process's own table, not the exiting process's, so exit alone
+    doesn't touch it. <code>handle_close</code> (syscall 13) closes that
+    gap: it validates a handle belongs to the caller and is currently in
+    use, then calls the same <code>free_object()</code>/<code>free_handle()</code>
+    pair — a second entry point into the same reclaim mechanism that
+    doesn't require exiting first. <code>init.c</code> uses this to
+    close its own query handle onto <code>hello_service</code> after
+    each restart cycle, so a real restart loop doesn't slowly exhaust
+    the shared kernel object table. Verified in QEMU: <code>objs</code>
+    returns to the exact clean-boot baseline after a full
+    spawn/exit/restart/exit cycle and after several rounds of
+    open/query/close/restart — zero net object growth, not just a
+    smaller leak — and matches hand arithmetic exactly at every step.
 </p>
 
 <h2 id="ipc">IPC (channels)</h2>
@@ -493,7 +364,7 @@ shell/            the interactive shell
 <table>
 <tr><th>#</th><th>Name</th><th>Arguments</th><th>Notes</th></tr>
 <tr><td>1</td><td>print</td><td>message ptr, hex value</td><td>prints the string then the value in hex</td></tr>
-<tr><td>3</td><td>query handle</td><td>handle</td><td>resolves a handle in the caller's own table, returns ground-truth data (e.g. a process's task index) or a <code>-1</code> sentinel; requires <code>RIGHT_QUERY</code> as of milestone 27</td></tr>
+<tr><td>3</td><td>query handle</td><td>handle</td><td>resolves a handle in the caller's own table, returns ground-truth data (e.g. a process's task index) or a <code>-1</code> sentinel; requires <code>RIGHT_QUERY</code></td></tr>
 <tr><td>4</td><td>vfs_read</td><td>path ptr, buffer ptr, max length</td><td>backs the native <code>file.read()</code></td></tr>
 <tr><td>5</td><td>vfs_write</td><td>path ptr, buffer ptr, length</td><td>backs the native <code>file.write()</code></td></tr>
 <tr><td>6</td><td>spawn</td><td>path ptr, load_vaddr, stack_vaddr</td><td>backs the native <code>process.spawn()</code> — reuses <code>spawn_process_from_path()</code> unchanged</td></tr>
@@ -507,9 +378,8 @@ shell/            the interactive shell
     loaded (no CR3 switch on <code>int 0x80</code> entry), so
     dereferencing a ring3-supplied pointer needs no special mechanism —
     but nothing here validates that a pointer argument actually belongs
-    to the calling process (handle arguments <em>are</em> now
-    rights-checked for both <code>channel</code> and <code>process</code>,
-    as of milestones 25 and 27 — see
+    to the calling process (handle arguments <em>are</em> rights-checked
+    for both <code>channel</code> and <code>process</code> — see
     <a href="#capabilities">Capabilities</a> below). See
     <a href="#limitations">Known limitations</a> for what's still open.
 </div>
@@ -536,14 +406,12 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     for a real rejected send attempt.
 </p>
 <p>
-    Milestone 27 extended real enforcement to <code>process</code>
-    handles too. <code>RIGHT_QUERY</code> had existed since milestone 25
-    and was already granted to every process's own self-handle (since
-    milestone 14) — but syscall 3 never actually checked it, resolving
-    any valid <code>OBJ_PROCESS</code> handle regardless of rights. Now it
-    does, using the same inline check syscalls 7/8/9 use.
-    <code>open_process</code> (syscall 10) is the first real
-    <strong>cross-process</strong> capability — given another task's
+    Real enforcement extends to <code>process</code> handles too.
+    <code>RIGHT_QUERY</code> is granted to every process's own
+    self-handle, and syscall 3 checks it before resolving any
+    <code>OBJ_PROCESS</code> handle, using the same inline check
+    syscalls 7/8/9 use. <code>open_process</code> (syscall 10) is the
+    real <strong>cross-process</strong> capability — given another task's
     index, it mints a handle to that process in the caller's own table,
     granting the intersection of a caller-<em>requested</em> rights
     bitmask and what's actually grantable. Requesting <code>0</code>
@@ -557,18 +425,16 @@ const int RIGHT_RECEIVE = 4;</code></pre>
 
 <h2 id="memory-protection">Memory protection: the shared region, and NX</h2>
 <p>
-    Milestone 26 closed a real gap: <code>clone_address_space()</code>
-    (<code>mm/paging.c</code>) used to copy the kernel's own
-    <code>PDPT[0]</code>/<code>PDPT[1]</code> entries into every new
-    address space unchanged, including the user (<code>0x04</code>) bit —
-    since x86 paging ANDs that bit across every level from PML4 down to
-    the leaf, a supervisor-only leaf mapping underneath didn't matter if
-    an intermediate PDPT entry above it was user-accessible. Tracing every
-    actual leaf-level <code>map_page</code>/<code>map_page_in</code> call
-    site first showed the real, exploitable surface was narrower than it
-    looked — the heap and the <code>map</code> demo command already
-    passed leaf flags without the user bit, so the actual gap was
-    specifically <code>boot.s</code>'s static 1GB identity map's 2MB
+    <code>clone_address_space()</code> (<code>mm/paging.c</code>) strips
+    the user (<code>0x04</code>) bit from its copy of the kernel's own
+    <code>PDPT[0]</code>/<code>PDPT[1]</code> entries when building a new
+    address space — x86 paging ANDs that bit across every level from
+    PML4 down to the leaf, so a supervisor-only leaf mapping underneath
+    doesn't matter if an intermediate PDPT entry above it is
+    user-accessible. The exploitable surface turned out to be narrower
+    than it might look — the heap and the <code>map</code> demo command
+    already pass leaf flags without the user bit, so the gap this closes
+    is specifically <code>boot.s</code>'s static 1GB identity map's 2MB
     huge-page leaves (PDPT index 0).
 </p>
 <p>
@@ -593,9 +459,9 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     <a href="examples.html">Walkthrough</a> for the real captured output.
 </p>
 <p>
-    <strong>Milestone 28</strong> added real NX (no-execute) enforcement
-    — the classic W^X hardening that stops injected "shellcode" from
-    being jumped to and run. <code>boot.s</code> sets
+    Real NX (no-execute) enforcement — the classic W^X hardening that
+    stops injected "shellcode" from being jumped to and run — is also in
+    place. <code>boot.s</code> sets
     <code>EFER.NXE</code> (bit 11) at boot, in the same <code>rdmsr</code>/
     <code>wrmsr</code> round trip as the existing <code>EFER.LME</code> —
     order matters, since setting a page table entry's NX bit (PTE bit 63)
@@ -651,7 +517,7 @@ u64  channel_receive(channel* self);   // blocks; fails without RIGHT_RECEIVE</c
 
 u64 process_spawn(process* self, u64 load_vaddr, u64 stack_vaddr);
 // returns the new process's task index, or -1</code></pre>
-<div class="code-label">process_handle — handle-based, query an already-running task (milestone 27)</div>
+<div class="code-label">process_handle — handle-based, query an already-running task</div>
 <pre><code>typedef struct { int handle; } process_handle;
 
 bool process_handle_open(process_handle* self, int task_index, int requested_rights);
@@ -686,8 +552,8 @@ int close(int fd);</code></pre>
 <p>
     Ring3 programs are real, gcc-compiled C — not hand-assembled machine
     code (originally real <code>minicc --freestanding</code>-compiled
-    MiniC, milestone 21; rewritten to C along with the rest of the
-    kernel). The loader's model is dead-simple (copy one contiguous byte
+    MiniC; rewritten to C along with the rest of the kernel). The
+    loader's model is dead-simple (copy one contiguous byte
     range, jump to its first byte), which doesn't survive unmodified for
     compiled output: string literals land in <code>.rodata</code> and
     globals in <code>.bss</code>/<code>.data</code>, separate ELF sections
@@ -725,9 +591,9 @@ int close(int fd);</code></pre>
 
 <h2 id="pci">Hardware discovery: PCI</h2>
 <p>
-    Milestone 29 (Phase X's first step) is the first time this kernel
-    discovers its own hardware instead of trusting a fixed, hardcoded
-    I/O port — every earlier driver (VGA, serial, keyboard, PIT/PIC,
+    This is the first place this kernel discovers its own hardware
+    instead of trusting a fixed, hardcoded I/O port — every earlier
+    driver (VGA, serial, keyboard, PIT/PIC,
     ATA) just assumes its device sits at a well-known legacy address.
     That stops working the moment a device's location genuinely isn't
     fixed, which is exactly true of a NIC — networking's real
@@ -760,28 +626,23 @@ int close(int fd);</code></pre>
     <code>disk/ata.c</code> already talks to by hardcoded port),
     <code>0x1234:0x1111</code> (the Bochs/QEMU standard VGA device), and
     <code>0x8086:0x100e</code> — a real Intel e1000 gigabit NIC, found
-    with zero extra QEMU flags, and the next Phase X milestone's target
-    device. See the <a href="examples.html">Walkthrough</a> for the real
-    captured output.
+    with zero extra QEMU flags. See the <a href="examples.html">Walkthrough</a>
+    for the real captured output.
 </p>
 
 <h2 id="e1000">The e1000 NIC driver</h2>
 <p>
-    Milestone 30 is a real driver for the e1000 milestone 29 already
-    found — deliberately scoped to <strong>initialization only</strong>:
-    enable the device, map its registers, read back real hardware state.
-    Setting up the RX/TX descriptor rings and moving an actual packet is
-    a separably-sized hard problem, left for a later milestone — the
-    same "narrowest safe first version" discipline bus-0-only PCI
-    enumeration used.
+    A real driver for the e1000 PCI enumeration finds — enables the
+    device, maps its registers, and reads back real hardware state, on
+    top of real RX/TX descriptor rings that move actual packets.
 </p>
 <p>
     Unlike every earlier driver in this kernel, the e1000's real
     register file isn't reached through port I/O — it's
     <strong>memory-mapped</strong> (MMIO). <code>net/e1000.c</code>
-    enables the device over PCI (<code>drivers/pci.c</code>'s new
-    <code>pci_config_write_dword()</code> — this kernel's first PCI config
-    space <em>write</em>, every earlier use was read-only — sets Memory
+    enables the device over PCI (<code>drivers/pci.c</code>'s
+    <code>pci_config_write_dword()</code> — a real PCI config space
+    <em>write</em>, not just a read — sets Memory
     Space + Bus Master in the command register), reads BAR0
     (<code>pci_read_bar0()</code>) to find the device's real physical MMIO
     base, and maps 8 pages of it into the kernel's own address space via
@@ -807,9 +668,9 @@ int close(int fd);</code></pre>
     real hardware auto-loads its burned-in address — rather than
     implementing the separate EEPROM-read protocol (register
     <code>EERD</code>) just to re-derive a value already sitting in
-    plain registers. Verified the same way milestone 29's own proof was:
-    checkable against something this kernel had no part in choosing. The
-    real MAC read back, <code>52:54:00:12:34:56</code>, is QEMU's own
+    plain registers. Verified the same way PCI enumeration's own proof
+    was: checkable against something this kernel had no part in
+    choosing. The real MAC read back, <code>52:54:00:12:34:56</code>, is QEMU's own
     well-known, publicly documented default NIC MAC — not a number this
     driver could fake its way into producing by accident — and the
     link-up bit reads a second, separate piece of real hardware state.
@@ -817,15 +678,13 @@ int close(int fd);</code></pre>
     captured output.
 </p>
 <p>
-    <strong>Milestone 31</strong> builds on that groundwork with real
-    TX/RX descriptor rings and a genuine packet round trip — the
-    DMA-buffer-management work milestone 30 deliberately deferred. A NIC
+    Real TX/RX descriptor rings back a genuine packet round trip. A NIC
     doesn't move bytes through registers one at a time the way port I/O
     devices do: the driver hands the hardware a ring of
     <strong>descriptors</strong> (each a pointer to a real data buffer,
     plus length/status/command fields) living in ordinary RAM, and the
     device DMAs to/from those buffers itself once bus-mastering is
-    enabled (already turned on in milestone 30). <code>packed struct
+    enabled. <code>packed struct
     TxDescriptor</code>/<code>RxDescriptor</code> match the hardware's
     own 16-byte layout exactly. <code>e1000_send()</code> copies data into
     a buffer, hands a descriptor to the hardware, and polls the
@@ -834,16 +693,6 @@ int close(int fd);</code></pre>
     bounded-poll, fail-clean discipline <code>disk/ata.c</code>'s
     <code>ata_wait_ready</code>/<code>ata_wait_drq</code> already established.
     <code>e1000_receive()</code> is the RX-side equivalent.
-</p>
-<p>
-    Deliberately <strong>not</strong> a real ARP subsystem — no address
-    resolution cache, no general request/reply handling. The shell's new
-    <code>arp</code> command crafts exactly one hardcoded, valid
-    Ethernet+ARP request frame asking "who has 10.0.2.2" (QEMU's SLIRP
-    networking's own well-known default gateway), purely as a real
-    external stimulus to prove RX genuinely works — the same "one
-    hardcoded test case, not a general framework" scope milestone 26's
-    <code>ring3fault</code> already used.
 </p>
 <p>
     A real fix found during testing, not assumed correct from the start:
@@ -868,31 +717,27 @@ int close(int fd);</code></pre>
 
 <h2 id="arp">A real ARP resolver</h2>
 <p>
-    Milestone 32 replaces milestone 31's own hardcoded one-shot ARP
-    request/reply with a genuine resolver, built directly on the proven
-    TX/RX plumbing rather than starting over. <code>net/arp.c</code>
+    A genuine resolver, built directly on the proven TX/RX plumbing.
+    <code>net/arp.c</code>
     keeps a fixed-size cache (<code>ArpEntry[8]</code>) and exposes one
     real entry point, <code>arp_resolve(ip, mac_out)</code>: check the
     cache first; only on a miss, send a real request and poll for a
     genuinely matching reply (right EtherType, right opcode, right
     sender IP — anything else that arrives is ignored, not mistaken for
     the answer) against a real <code>g_tick_count</code>-bounded timeout,
-    the same lesson milestone 31 already learned about spin counts not
-    reliably corresponding to real time.
+    since a spin loop doesn't reliably correspond to real time.
 </p>
 <p>
     Deliberately scoped as a <strong>client (resolver) only</strong>, not
     a responder — this kernel's own IP address (<code>net/ip.c</code>'s
-    <code>g_my_ip</code>, milestone 33) is a fixed, static assumption, not
+    <code>g_my_ip</code>) is a fixed, static assumption, not
     real DHCP-negotiated configuration, so answering "who has &lt;our
     address&gt;" for an address nothing actually negotiated doesn't mean
     much yet. The cache also has no eviction or TTL — a fixed-size table
-    that just fills up, the same "narrowest safe first version" every
-    driver-layer milestone in this phase has used.
+    that just fills up.
 </p>
 <p>
-    The shell's <code>arp</code> command (same name milestone 31 used,
-    now backed by the real mechanism) runs four checks in one pass, each
+    The shell's <code>arp</code> command runs four checks in one pass, each
     independently checkable: resolve the gateway (a real external round
     trip, non-trivial elapsed ticks); resolve it again (zero elapsed
     ticks — a real, timing-based proof of the cache, not just "the same
@@ -906,10 +751,9 @@ int close(int fd);</code></pre>
 
 <h2 id="ip">A real IP layer</h2>
 <p>
-    Milestone 33 adds a real IPv4 layer, verified with a genuine ICMP
-    echo (ping) round trip — the minimal, natural test vehicle for "does
-    IP genuinely work end to end," the same relationship milestone 31's
-    hardcoded ARP request had to proving TX/RX worked at all. A bare IP
+    A real IPv4 layer, verified with a genuine ICMP echo (ping) round
+    trip — the minimal, natural test vehicle for "does IP genuinely work
+    end to end." A bare IP
     packet with no upper-layer protocol has nothing that could reply to
     it; ICMP echo is the smallest real protocol that gets an external,
     independently meaningful response.
@@ -929,11 +773,11 @@ int close(int fd);</code></pre>
 </p>
 <p>
     <code>net/icmp.c</code>'s <code>icmp_ping()</code> resolves the
-    target's MAC via milestone 32's real <code>arp_resolve()</code> first
+    target's MAC via the real <code>arp_resolve()</code> first
     (a cache hit costs nothing here), builds a real Ethernet+IPv4+ICMP
     echo request, sends it, and polls — real <code>g_tick_count</code>-
-    bounded, milestone 31/32's already-learned timing lesson — for a
-    reply matching on <em>every</em> real field: EtherType, IP protocol,
+    bounded, since a spin loop doesn't reliably correspond to real
+    time — for a reply matching on <em>every</em> real field: EtherType, IP protocol,
     source IP, ICMP type, and the exact identifier/sequence number this
     specific request sent, not just "something ICMP arrived."
 </p>
@@ -946,18 +790,18 @@ int close(int fd);</code></pre>
     network stack rather than answered at all, so the reply arriving at
     all is itself strong indirect evidence the header was built correctly
     — the same "external validation beats self-validation" property
-    every proof in this networking phase has looked for. See the
+    every networking proof on this page looks for. See the
     <a href="examples.html">Walkthrough</a> for the real captured output.
 </p>
 
 <h2 id="udp">A real UDP layer</h2>
 <p>
-    Milestone 34 adds real UDP — the simpler of the two remaining
-    transport protocols: no connection state, no retransmission or
-    congestion control, just a port-addressed datagram wrapper over the
-    now-working IP layer. TCP's real connection state machine, sequence
-    numbers, and retransmission remain a substantially bigger, genuinely
-    separate hard problem, left for a later milestone.
+    UDP is the simpler of the two transport protocols: no connection
+    state, no retransmission or congestion control, just a
+    port-addressed datagram wrapper over the IP layer. TCP's real
+    connection state machine, sequence numbers, and retransmission
+    remain a substantially bigger, genuinely separate hard problem
+    (see below).
 </p>
 <p>
     <code>net/udp.c</code>'s <code>udp_checksum()</code> covers a
@@ -980,7 +824,7 @@ int close(int fd);</code></pre>
     real-protocol message as a test vehicle" discipline ARP's request
     and ICMP's ping both already used. It sends a minimal, hand-crafted
     query to QEMU SLIRP's own built-in DNS proxy (<code>10.0.2.3</code>,
-    the same address <code>arp</code> already resolved in milestone 32)
+    the same address <code>arp</code> already resolves)
     and verifies the exact transaction ID sent, the response (QR) bit,
     and a real answer count — proving SLIRP genuinely forwarded the
     query to a real upstream resolver and got a real answer back.
@@ -999,18 +843,16 @@ int close(int fd);</code></pre>
 
 <h2 id="tcp">A real TCP client</h2>
 <p>
-    Milestone 35 adds real TCP — the first genuinely stateful transport
-    protocol in this kernel, and the first time any protocol layer here
-    has talked to a host off the local SLIRP subnet (every earlier
-    target was the gateway at <code>10.0.2.2</code> or the DNS proxy at
-    <code>10.0.2.3</code>, both local). A real internet host doesn't
-    answer ARP requests from this guest at all, so <code>net/tcp.c</code>'s
-    <code>tcp_fetch()</code> ARP-resolves the <em>gateway's</em> MAC for
-    the Ethernet-level destination while putting the real remote IP in
-    the IP header itself — routing, not resolution, decides an
-    off-subnet frame's link-layer destination, the same distinction
-    every real router relies on and the one genuinely new wrinkle this
-    milestone had to get right that no earlier layer here ever needed to.
+    TCP is the first genuinely stateful transport protocol in this
+    kernel, and the only one that talks to a host off the local SLIRP
+    subnet (every other protocol's target is the gateway at
+    <code>10.0.2.2</code> or the DNS proxy at <code>10.0.2.3</code>,
+    both local). A real internet host doesn't answer ARP requests from
+    this guest at all, so <code>net/tcp.c</code>'s <code>tcp_fetch()</code>
+    ARP-resolves the <em>gateway's</em> MAC for the Ethernet-level
+    destination while putting the real remote IP in the IP header itself
+    — routing, not resolution, decides an off-subnet frame's link-layer
+    destination, the same distinction every real router relies on.
 </p>
 <p>
     <code>tcp_checksum()</code> follows the identical pseudo-header shape
@@ -1022,13 +864,15 @@ int close(int fd);</code></pre>
     ACK), a real data segment carrying an actual HTTP/1.1 request, a
     receive loop that ACKs each arriving segment and keeps polling until
     the peer's FIN or the caller's buffer fills, and a best-effort
-    graceful close that isn't required for the milestone's own success
-    criterion. <code>net/dns.c</code> gained a real <code>dns_resolve_a()</code>
+    graceful close that isn't required for a successful fetch to have
+    already happened. <code>net/dns.c</code> gained a real <code>dns_resolve_a()</code>
     alongside the existing <code>dns_query()</code> — it actually parses
     the answer section (a DNS-compression name pointer or a literal one,
     skipping past a CNAME if one leads) instead of only checking the
     header, so the TCP demo's target is a freshly-resolved real IP, not
-    a hardcoded address that could go stale.
+    a hardcoded address that could go stale. No retransmission,
+    congestion control, listening/server side, or connection table —
+    real, substantial follow-on work, not oversights.
 </p>
 <p>
     Verified in QEMU, twice, independently: two different real IPs for
@@ -1069,25 +913,24 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 
 <h2 id="limitations">Known limitations (on purpose, for now)</h2>
 <ul>
-<li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
-<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>channel</code> (milestone 25) and <code>process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
-<li><s>No process teardown/exit exists at all</s> — <strong>fixed in milestone 37</strong> (see <a href="#process-model">Process model &amp; isolation</a>): a real <code>process_exit</code> syscall, verified with <code>ps</code>'s own <code>exited=0x</code> field. <s>Nothing is reclaimed when a process exits</s> — <strong>frames fixed in milestone 39</strong>: image, stack, and page-table frames plus the process's own PML4/PDPT are all freed, verified against exact frame-count arithmetic. <s>The process/task table slot stays occupied forever</s> — <strong>fixed in milestone 40</strong>: the next spawn reuses an exited slot (and its already-allocated kernel stack) instead of growing the table, verified across repeated restart cycles never growing <code>ps</code>'s process count. <s><code>g_objects[8]</code> (the kernel object table) isn't reclaimed at all</s> — <strong>fixed in milestone 41</strong>: <code>process_exit</code> now frees every object referenced by the exiting process's own handle table, verified with <code>objs</code> matching exact hand arithmetic and the milestone-40 regression scenario re-run clean. <s>A handle another process holds to a still-running process has no way to be released early</s> — <strong>fixed in milestone 42</strong>: a new <code>handle_close</code> syscall lets the holder free one of its own handles (and the object behind it) without exiting, verified by looping <code>init</code>'s restart of <code>hello_service</code> 3 times with a close after each cycle and confirming <code>objs</code> returns to the exact clean-boot baseline every time. <strong>Still open</strong>: any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the same "no ownership on handles" gap elsewhere on this list.</li>
-<li><s><code>spawn_builtin</code>'s program registry is a single fixed, compile-time entry</s> — <strong>fixed in milestone 43</strong>: a new <code>register_service</code> syscall lets a ring3 process load a VFS file into one of 4 runtime registry slots and get back an index <code>spawn_builtin</code> can launch alongside the one fixed compile-time entry, verified by registering and launching the boot demo's own binary at runtime and confirming the resulting process's self-query matches. <s>No <code>unregister_service</code>, so those 4 slots are a lifetime cap per boot</s> — <strong>fixed in milestone 44</strong>: a new <code>unregister_service</code> syscall frees a slot for genuine reuse, verified by registering, unregistering, confirming <code>spawn_builtin</code> on that index now fails, then re-registering and confirming the exact same index and a working spawn. <strong>Still open</strong>: <code>unregister_service</code> doesn't check that the caller is the one who registered the slot — any process can unregister any slot, the same pointer/resource-ownership gap documented elsewhere on this list, not closed by this milestone. <code>init.c</code> restarts its one service exactly once (milestone 38) — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills (see the process-table limitation below).</li>
-<li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
+<li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>channel</code> and <code>process</code> handles are real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one. <code>unregister_service</code> (see <a href="#process-model">Process model &amp; isolation</a>) shares this same gap: any process can unregister any runtime service slot, not just the one it registered.</li>
+<li><strong>A handle another process holds to a still-running process can be released early</strong> (<code>handle_close</code>) and everything tied to an exited process is reclaimed (frames, process/task slot, kernel object table) — see <a href="#process-model">Process model &amp; isolation</a> for the full mechanism. <strong>Still open</strong>: any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the pointer-ownership gap above.</li>
+<li><strong><code>init.c</code> restarts its one service exactly once per cycle</strong>, not in an unbounded loop — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills.</li>
+<li><strong>A loaded ring3 program's own code+data image is fully executable</strong> (no W^X split within it — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so NX protection, which does cover every dynamically-mapped pure-data region including every ring3 process's own user stack, can't be applied within a loaded image itself; see <a href="#memory-protection">Memory protection</a>). ASLR and true process sandboxing (beyond the address-space isolation this kernel already has) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
-<li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.c</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
-<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arp_resolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. <s>No TCP</s> — <strong>fixed in milestone 35</strong> (see <a href="#tcp">A real TCP client</a>): a real 3-way handshake, real data exchange, and a genuine HTTP round trip to an actual internet host. <strong>Still open</strong>: no retransmission or congestion control at all (a lost segment just times out), client-only (no listening/server side), one connection at a time with no connection table, no options (no window scaling, no SACK), and close is best-effort only. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no record types beyond A — it exists purely as an external test vehicle for UDP (<code>dns_resolve_a()</code>, added for TCP's own real target resolution, does real answer-section parsing but still only ever asks for one A record, no retry, no multiple questions). The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
+<li><strong>PCI enumeration is bus 0 only</strong> (see <a href="#pci">Hardware discovery: PCI</a>) — no bridge recursion, no general driver-registration framework. <code>disk/ata.c</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> finds that exact same controller.</li>
+<li><strong>ARP is client-only</strong> (no responder), with no cache eviction/TTL. This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. <strong>ICMP is the only IP-layer protocol implemented</strong>, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no record types beyond A — it exists purely as an external test vehicle for UDP (<code>dns_resolve_a()</code>, used for TCP's own target resolution, does real answer-section parsing but still only ever asks for one A record, no retry, no multiple questions). <strong>TCP</strong> (see <a href="#tcp">A real TCP client</a>) is client-only, one connection at a time with no connection table, no retransmission or congestion control at all (a lost segment just times out), no options (no window scaling, no SACK), and close is best-effort only. The e1000's TX/RX rings are fixed-size (8 descriptors each), and both poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
 </ul>
 
 </main>
 
 <footer>
     MiniC OS is a hobby kernel project, hand-written in freestanding C
-    (originally built in MiniC through milestone 34 — see the
-    <a href="roadmap.html">Roadmap</a>). Source on
-    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+    (originally built in a language called MiniC, then rewritten by hand
+    into C — see the <a href="roadmap.html">Capabilities</a> page).
+    Source on <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 
 </body>
