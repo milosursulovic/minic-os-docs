@@ -194,9 +194,19 @@ shell/            the interactive shell
 <p>
     <code>sleep(ticks)</code> adds real blocking: a task marks itself
     blocked with a wake tick and yields away; the scan skips blocked tasks,
-    waking one up the moment its condition is met. Channel receive (see
-    <a href="#ipc">IPC</a> below) reuses this exact mechanism with a second
-    kind of wake condition, not a separate blocking primitive.
+    waking one up the moment its condition is met. Every other blocking
+    primitive in this kernel - channel receive (see <a href="#ipc">IPC</a>
+    below), and every async I/O wait (see <a href="#async-io">Async file
+    I/O</a>/<a href="#async-net">Async networking</a>) - reuses the exact
+    same mechanism rather than inventing a separate one each time: a
+    task's own <code>waiting_on</code> field is either <code>NULL</code>
+    (blocked on the tick check above) or points at whatever real
+    <code>bool</code> flag needs to become true - a channel's own
+    <code>full</code> field, a pending request's own <code>done</code>
+    field. <code>yield()</code>'s wake check is a single dereference of
+    that pointer when it's set, so adding a new blocking primitive never
+    needs a new dedicated field or a new branch in the scheduler - just
+    point <code>waiting_on</code> at the right flag.
 </p>
 
 <h2 id="process-model">Process model &amp; isolation</h2>
@@ -384,12 +394,13 @@ shell/            the interactive shell
     passed - then returns a real kernel-object handle immediately,
     without waiting for anything. Syscall 17, <code>file_read_wait</code>,
     is where blocking actually happens: it resolves the handle, and if
-    the worker hasn't finished yet, blocks the caller via a third
-    wake-condition class in <code>sched/task.c</code>'s <code>yield()</code>
-    - the exact same shape <code>channel_receive()</code>'s own wake
-    condition already uses, not a busy spin - then copies from the
-    worker's scratch buffer into the caller's own buffer and frees the
-    request slot, object, and handle together. Syscalls 18/19,
+    the worker hasn't finished yet, blocks the caller via
+    <code>sched/task.c</code>'s generic wake-condition mechanism (see
+    <a href="#scheduler">Scheduler</a>) - the exact same primitive
+    <code>channel_receive()</code> already uses, not a busy spin - then
+    copies from the worker's scratch buffer into the caller's own
+    buffer and frees the request slot, object, and handle together.
+    Syscalls 18/19,
     <code>file_write_async</code>/<code>file_write_wait</code>, are the
     same shape in reverse: the write payload is copied into the
     request's own kernel buffer at issue time (same dereferenceability
@@ -452,11 +463,9 @@ shell/            the interactive shell
     reasoning as every other async issue call). Both return a handle
     immediately. Syscall 21 (<code>net_ping_wait</code>) and syscall 23
     (<code>net_dns_wait</code>, which also copies the resolved 4-byte
-    IP into the caller's own buffer on success) block via a
-    <em>fourth</em> wake-condition class in <code>sched/task.c</code>'s
-    <code>yield()</code> (<code>waiting_net_ping</code>, alongside
-    <code>waiting_channel</code>/<code>waiting_io_request</code>) - the
-    same shape as every blocking primitive that came before it. Each
+    IP into the caller's own buffer on success) block via the same
+    generic wake-condition mechanism every blocking primitive in this
+    kernel now shares (see <a href="#scheduler">Scheduler</a>). Each
     wait syscall rejects a handle issued by the other network
     operation, same guard as the file read/write pair.
 </p>
