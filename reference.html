@@ -280,6 +280,24 @@ shell/            the interactive shell
     init both <code>exited=0x0</code> while hello_service alone shows
     <code>exited=0x1</code>, immediately and every time.
 </p>
+<p>
+    Milestone 38 closes the loop: <code>init.c</code> now opens a
+    <code>ProcessHandle</code> to its spawned service and busy-polls its
+    query (syscall 3) until it fails, then spawns a fresh instance -
+    real restart-on-exit, not just spawn-and-forget. That needed a real
+    fix: syscall 3 previously resolved an <code>OBJ_PROCESS</code>
+    handle straight to a <code>task_index</code> with no check on
+    whether the target had actually exited, so querying a handle to an
+    already-dead process silently returned a stale <code>task_index</code>
+    instead of failing - fixed with a one-line check against
+    <code>g_processes[proc_idx].used</code>. Deliberately restarts only
+    once: the process table is a fixed 4 slots, already full after the
+    demo, init, and two <code>hello_service</code> instances, and there's
+    still no resource reclamation on exit for a real looping supervisor
+    to rely on. No yield/sleep syscall exists for ring3 yet, so the poll
+    busy-spins - acceptable here since <code>hello_service</code> exits
+    almost immediately.
+</p>
 
 <h2 id="ipc">IPC (channels)</h2>
 <p>
@@ -884,7 +902,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>channel</code> (milestone 25) and <code>process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
 <li><s>No process teardown/exit exists at all</s> — <strong>fixed in milestone 37</strong> (see <a href="#process-model">Process model &amp; isolation</a>): a real <code>process_exit</code> syscall, verified with <code>ps</code>'s own <code>exited=0x</code> field. <strong>Still open</strong>: nothing is reclaimed when a process exits — its frames stay mapped, its process/task table slot stays occupied forever (so a long-running system that spawns and exits many processes will eventually hit the fixed table caps below), and any handle still pointing at it stays valid but now points at something that will never run again.</li>
-<li><strong><code>spawn_builtin</code>'s program registry is a single fixed, compile-time entry</strong> (<code>hello_service.c</code>) — nothing can register a new spawnable program at runtime, and nothing yet bridges "a real service lives on disk" to this specific mechanism (that's still the separate <code>spawn_process_from_path()</code>/syscall 6 path). <code>init.c</code> itself does nothing past spawning its one service — no supervision (it never watches for the service exiting, even though real exit now exists), no dependency ordering, no real orchestration logic.</li>
+<li><strong><code>spawn_builtin</code>'s program registry is a single fixed, compile-time entry</strong> (<code>hello_service.c</code>) — nothing can register a new spawnable program at runtime, and nothing yet bridges "a real service lives on disk" to this specific mechanism (that's still the separate <code>spawn_process_from_path()</code>/syscall 6 path). <code>init.c</code> restarts its one service exactly once (milestone 38) — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills (see the process-table limitation below).</li>
 <li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
