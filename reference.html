@@ -418,9 +418,65 @@ shell/            the interactive shell
     correctly. <code>objs</code> returns cleanly afterward every run,
     confirming the request slot, object, and handle are all actually
     freed rather than leaked. Deliberately narrow: a fixed 4-request
-    pool with a 512-byte cap per operation, and network I/O
-    (ARP/ICMP/UDP/TCP) has no ring3-facing syscall at all yet, so
-    there's nothing there to make async.
+    pool with a 512-byte cap per operation.
+</p>
+
+<h2 id="async-net">Async networking: the first ring3-facing network capability</h2>
+<p>
+    Every network operation in this kernel - ARP, ICMP, UDP, DNS, TCP -
+    was a kernel-mode shell command only, with zero ring3-facing
+    syscall of any kind. Rather than exposing a synchronous version
+    first, ICMP ping goes straight to async, the same shape as the
+    file operations above: a process issues a ping and gets back a
+    handle immediately, does other real work, then collects the result
+    only when it needs it.
+</p>
+<p>
+    <code>proc/net_request.c</code> holds its own small pool - 2
+    pending-ping slots - serviced by a <em>separate</em> dedicated
+    worker task (<code>net_worker_entry()</code>) from the file-I/O
+    one. Deliberately not shared: <code>icmp_ping()</code>'s own
+    internal timeout can run up to 2000 ticks, and one worker servicing
+    both domains would let a slow ping stall a pending file operation
+    (or vice versa) for that entire window. Syscall 20,
+    <code>net_ping_async</code>, packs the target IP into a single
+    argument and returns a handle immediately; syscall 21,
+    <code>net_ping_wait</code>, blocks via a <em>fourth</em>
+    wake-condition class in <code>sched/task.c</code>'s
+    <code>yield()</code> (<code>waiting_net_ping</code>, alongside
+    <code>waiting_channel</code>/<code>waiting_io_request</code>) -
+    the same shape as every blocking primitive that came before it.
+</p>
+<p>
+    A real, small correctness improvement came along with this:
+    <code>net/arp.c</code>'s <code>arp_resolve()</code> and
+    <code>net/icmp.c</code>'s <code>icmp_ping()</code> now call
+    <code>yield()</code> inside their own poll loops, not just relying
+    on the timer to force a switch eventually. Both routinely run for
+    hundreds of ticks and are now regularly invoked from a background
+    worker task on another process's behalf - cooperating with the
+    scheduler instead of just waiting to be interrupted is the right
+    default there, matching <code>io_worker_entry()</code>'s own
+    already-established pattern. This changes nothing about the
+    existing kernel-mode <code>ping</code>/<code>arp</code> commands'
+    own behavior - confirmed with a full regression pass.
+</p>
+<p>
+    Verified in QEMU, twice: the boot-time demo process issues an
+    async ping to QEMU's real gateway (<code>10.0.2.2</code>, the same
+    target the kernel-mode <code>ping</code> command uses), does 5
+    rounds of real work before waiting for it - all 5 prints land
+    before the wait unblocks, and the wait resolves with a genuine
+    successful round trip to QEMU's real network backend, not a stub.
+    A regression pass confirmed the kernel-mode <code>ping</code>/
+    <code>arp</code> commands still work correctly afterward - one
+    run's follow-up <code>ping</code> even showed
+    <code>elapsed_ticks=0x0</code>, a real cross-check that the ARP
+    cache entry the async ping's own <code>arp_resolve()</code> call
+    populated was genuinely shared and reused, not a separate,
+    disconnected code path. Deliberately narrow: ICMP ping only - no
+    async ARP/UDP/DNS/TCP for ring3 yet, and those protocols still
+    have no ring3-facing syscall at all.
 </p>
 
 <h2 id="syscalls">The ring0/ring3 boundary &amp; syscall ABI</h2>
@@ -986,7 +1042,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>channel</code> and <code>process</code> handles are real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one. <code>unregister_service</code> (see <a href="#process-model">Process model &amp; isolation</a>) shares this same gap: any process can unregister any runtime service slot, not just the one it registered.</li>
 <li><strong>A handle another process holds to a still-running process can be released early</strong> (<code>handle_close</code>) and everything tied to an exited process is reclaimed (frames, process/task slot, kernel object table) — see <a href="#process-model">Process model &amp; isolation</a> for the full mechanism. <strong>Still open</strong>: any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the pointer-ownership gap above.</li>
 <li><strong><code>init.c</code> restarts its one service exactly once per cycle</strong>, not in an unbounded loop — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills.</li>
-<li><strong>Async I/O (see <a href="#async-io">Async file I/O</a>) covers file reads and writes only</strong>, backed by a fixed pool of 4 pending-request slots with a 512-byte buffer each — an operation larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. Network I/O (ARP/ICMP/UDP/TCP) has no ring3-facing syscall at all yet, so there's nothing to make async there — every network operation today is a kernel-mode shell command, entirely synchronous, busy-polling with no way for anything else to make progress while it's in flight.</li>
+<li><strong>Async file I/O (see <a href="#async-io">Async file I/O</a>) is backed by a fixed pool of 4 pending-request slots with a 512-byte buffer each</strong> — an operation larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. <strong>Async networking (see <a href="#async-net">Async networking</a>) is ICMP ping only</strong>, from a separate 2-slot pool — no async ARP/UDP/DNS/TCP for ring3 yet, and those protocols still have no ring3-facing syscall at all (they remain kernel-mode shell commands only).</li>
 <li><strong>A loaded ring3 program's own code+data image is fully executable</strong> (no W^X split within it — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so NX protection, which does cover every dynamically-mapped pure-data region including every ring3 process's own user stack, can't be applied within a loaded image itself; see <a href="#memory-protection">Memory protection</a>). ASLR and true process sandboxing (beyond the address-space isolation this kernel already has) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>

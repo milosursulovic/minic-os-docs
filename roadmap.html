@@ -85,6 +85,7 @@
 <li><strong>A real IPv4 layer</strong>, verified with a genuine ICMP echo (ping) round trip through the full stack: ARP resolution, real header construction, a real checksum, and a real Ethernet send/receive.</li>
 <li><strong>A real UDP layer</strong>, verified with a genuine DNS query answered by a real upstream resolver through QEMU's own network backend — not a loopback, not self-validation.</li>
 <li><strong>A real TCP client</strong>, verified with a genuine HTTP GET to a real internet host: a real 3-way handshake, a real data segment, a receive loop that ACKs each arriving segment, and a best-effort graceful close. The one distinction no earlier protocol layer needed: a real internet host doesn't answer ARP from this guest, so the gateway's MAC is resolved for the Ethernet-level destination while the real remote IP goes in the IP header — routing, not resolution, deciding an off-subnet frame's link-layer destination.</li>
+<li><strong>Ring3 networking, asynchronous from the start</strong> — every network operation above used to be a kernel-mode shell command only; a process can now issue a real ICMP ping and get back a handle immediately, backed by its own dedicated worker task and pending-request pool separate from the file-I/O one, so a slow ping can't stall a pending file operation or vice versa. Verified: several real prints from the calling process land between issuing the ping and waiting for it, and the wait resolves with a genuine successful round trip to QEMU's real gateway, not a stub.</li>
 </ul>
 
 <h2 id="rewrite">Language history</h2>
@@ -117,9 +118,9 @@
     its command surface touches raw kernel internals that shouldn't be
     arbitrary userspace syscalls in a real design, a substantially
     bigger and separate problem from the process/service architecture
-    above. Async file I/O covers reads and writes now, but network
-    operations (ARP/ICMP/UDP/TCP) have no ring3-facing syscall at all
-    yet - every one is still a kernel-mode shell command, entirely
+    above. Async I/O now covers file reads/writes and ICMP ping, but
+    ARP/UDP/DNS/TCP still have no ring3-facing syscall at all - every
+    one of those is still a kernel-mode shell command, entirely
     synchronous. The narrower gaps are documented on the
     <a href="reference.html#limitations">Known limitations</a> section
     of the Architecture page.
