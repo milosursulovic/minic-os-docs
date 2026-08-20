@@ -240,6 +240,23 @@ shell/            the interactive shell
     well-known slot 0 (a fresh handle table starts empty, so the first
     allocation into it always takes slot 0).
 </p>
+<p>
+    Milestone 36 adds a third way to spawn a process alongside the two
+    above: <code>spawn_builtin</code> (syscall 11) lets a ring3 process
+    spawn <em>another</em> ring3 process from a small, fixed,
+    kernel-embedded program registry, addressed by index rather than a
+    raw pointer or a filesystem path. This is what <code>proc/init.c</code>
+    — the kernel's first real init process, spawned by <code>kmain.c</code>
+    at boot the same way the existing demo process always has been —
+    uses to launch <code>proc/hello_service.c</code> without needing the
+    filesystem to have anything on it yet (a fresh <code>disk.img</code>
+    is empty until <code>mkfs</code>+<code>install</code> run manually).
+    The registry is intentionally not a raw-pointer API: letting ring3
+    code name an arbitrary address as "a program to run" would undo the
+    real work the capability/rights phase (milestones 25-27) put into
+    making sure ring3 code can only ever act through something the
+    kernel already vetted.
+</p>
 
 <h2 id="ipc">IPC (channels)</h2>
 <p>
@@ -843,7 +860,8 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <ul>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>channel</code> (milestone 25) and <code>process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
-<li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed.</li>
+<li><strong>No process teardown/exit exists at all.</strong> A ring3 process, once launched, runs forever (or blocks forever) — there's no syscall to end one, and a spawned process's frames are never freed. This is why <code>init.c</code> can't do any real supervision (restart on exit) yet either.</li>
+<li><strong><code>spawn_builtin</code>'s program registry is a single fixed, compile-time entry</strong> (<code>hello_service.c</code>) — nothing can register a new spawnable program at runtime, and nothing yet bridges "a real service lives on disk" to this specific mechanism (that's still the separate <code>spawn_process_from_path()</code>/syscall 6 path). <code>init.c</code> itself does nothing past spawning its one service and idling — no dependency ordering, no real orchestration logic.</li>
 <li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
