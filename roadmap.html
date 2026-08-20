@@ -74,6 +74,7 @@
 <li><strong>A VFS abstraction</strong> — a basic namespace (<code>/system</code>, <code>/devices</code>) via a small mount table, where the identical read call reaches two completely different mechanisms depending only on the path prefix.</li>
 <li><strong>A native File/Channel/Process API with real methods</strong>, plus a thin POSIX-shaped shim (<code>open</code>/<code>read</code>/<code>write</code>/<code>close</code>) implemented entirely in ring3 C over the existing File API, no extra syscalls needed.</li>
 <li><strong>Compiled C running in ring 3</strong> — ring3 processes are real, gcc-compiled programs, not hand-assembled blobs, using this kernel's own native API.</li>
+<li><strong>Genuinely asynchronous file reads</strong> — a process issues a read and gets back a handle immediately, does other real work of its own choosing, then collects the result only when it actually needs it. A dedicated kernel worker task performs the real disk read concurrently (cooperative multitasking standing in for real DMA/interrupts, since the ATA driver is PIO-only), and the caller only blocks - via the same scheduler wake-condition mechanism blocking IPC receive already uses - once it asks to wait for a result that isn't ready. Verified: several real prints from the calling process land between issuing the read and waiting for it, proving it wasn't stalled, and the async result's byte count and content exactly match an earlier synchronous read of the same file.</li>
 </ul>
 
 <h2>Hardware discovery &amp; networking</h2>
@@ -116,8 +117,11 @@
     its command surface touches raw kernel internals that shouldn't be
     arbitrary userspace syscalls in a real design, a substantially
     bigger and separate problem from the process/service architecture
-    above. Async I/O as a cross-cutting pass once sync I/O works
-    everywhere is open, alongside the narrower gaps documented on the
+    above. Async file reads exist now, but async I/O as a genuinely
+    cross-cutting pass doesn't yet - network operations (ARP/ICMP/UDP/
+    TCP) are all still fully synchronous, busy-polling with no way for
+    a process to do anything else while one is in flight. The narrower
+    gaps are documented on the
     <a href="reference.html#limitations">Known limitations</a> section
     of the Architecture page.
 </p>

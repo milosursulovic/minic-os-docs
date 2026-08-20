@@ -353,6 +353,60 @@ shell/            the interactive shell
     condition (a message arriving) alongside the tick check.
 </p>
 
+<h2 id="async-io">Async file reads</h2>
+<p>
+    Every other I/O path in this kernel is fully synchronous - the
+    calling task sits idle for the operation's entire duration, whether
+    it's a disk read or a network round trip. File reads are the one
+    exception: a process can issue a read and get back a handle
+    immediately, do other real work, then collect the result only when
+    it actually needs it.
+</p>
+<p>
+    <code>proc/io_request.c</code> holds a fixed pool of 4 pending-
+    request slots, each with its own 512-byte kernel-owned result
+    buffer, serviced by one dedicated kernel worker task
+    (<code>io_worker_entry()</code>, created at boot like any other
+    plain kernel task). The "async" part comes from cooperative
+    multitasking, not hardware DMA/interrupts - the ATA driver is
+    PIO-only, so the worker task's own <code>vfs_read()</code> call
+    genuinely runs concurrently with the caller only in the sense that
+    ordinary preemptive scheduling interleaves them, the same mechanism
+    behind every other concurrent thing this kernel does.
+</p>
+<p>
+    Syscall 16, <code>file_read_async</code>, copies the requested path
+    into the request slot's own kernel memory - the caller's path
+    pointer usually points into its own private ring3 image (a string
+    literal, for instance), which isn't safely dereferenceable from the
+    worker task's own kernel CR3 once several scheduler switches have
+    passed - then returns a real kernel-object handle immediately,
+    without waiting for anything. Syscall 17, <code>file_read_wait</code>,
+    is where blocking actually happens: it resolves the handle, and if
+    the worker hasn't finished yet, blocks the caller via a new third
+    wake-condition class in <code>sched/task.c</code>'s <code>yield()</code>
+    - the exact same shape <code>channel_receive()</code>'s own wake
+    condition already uses, not a busy spin - then copies from the
+    worker's scratch buffer into the caller's own buffer and frees the
+    request slot, object, and handle together.
+</p>
+<p>
+    Verified in QEMU, twice: the boot-time demo process issues an async
+    read of a file it already read synchronously earlier in its own
+    startup sequence, does 5 rounds of real work (prints) before
+    waiting, then collects the result. All 5 prints land before the
+    wait unblocks - proving the process genuinely wasn't stalled, not
+    just that the syscalls returned successfully - and the async read's
+    own byte count and buffer content exactly match the earlier
+    synchronous read of the same file, not just a plausible-looking
+    result. <code>objs</code> returns cleanly afterward, confirming the
+    request slot, object, and handle are all actually freed rather than
+    leaked. Deliberately narrow: read-only (no async write), a fixed
+    4-request pool with a 512-byte cap per result, and network I/O
+    (ARP/ICMP/UDP/TCP) stays entirely synchronous - see
+    <a href="#limitations">Known limitations</a>.
+</p>
+
 <h2 id="syscalls">The ring0/ring3 boundary &amp; syscall ABI</h2>
 <p>
     The calling convention is this kernel's own, since it goes through a
@@ -916,6 +970,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. <code>channel</code> and <code>process</code> handles are real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one. <code>unregister_service</code> (see <a href="#process-model">Process model &amp; isolation</a>) shares this same gap: any process can unregister any runtime service slot, not just the one it registered.</li>
 <li><strong>A handle another process holds to a still-running process can be released early</strong> (<code>handle_close</code>) and everything tied to an exited process is reclaimed (frames, process/task slot, kernel object table) — see <a href="#process-model">Process model &amp; isolation</a> for the full mechanism. <strong>Still open</strong>: any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the pointer-ownership gap above.</li>
 <li><strong><code>init.c</code> restarts its one service exactly once per cycle</strong>, not in an unbounded loop — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills.</li>
+<li><strong>Async I/O (see <a href="#async-io">Async file reads</a>) only covers file reads</strong>, backed by a fixed pool of 4 pending-request slots with a 512-byte result buffer each — a read larger than that gets silently truncated to the buffer's capacity, same as any other fixed-size table in this kernel. No async write, and network I/O (ARP/ICMP/UDP/TCP) is still entirely synchronous, busy-polling with no way for a process to do anything else while a network operation is in flight — real, separate follow-on work, not yet attempted.</li>
 <li><strong>A loaded ring3 program's own code+data image is fully executable</strong> (no W^X split within it — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so NX protection, which does cover every dynamically-mapped pure-data region including every ring3 process's own user stack, can't be applied within a loaded image itself; see <a href="#memory-protection">Memory protection</a>). ASLR and true process sandboxing (beyond the address-space isolation this kernel already has) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
