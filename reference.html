@@ -965,6 +965,54 @@ int close(int fd);</code></pre>
     <a href="examples.html">Walkthrough</a> for the real captured output.
 </p>
 
+<h2 id="graphics">A real graphics framebuffer</h2>
+<p>
+    The first graphics capability this kernel has ever had — everything
+    before this was VGA text mode only (writing character/color bytes to
+    <code>0xB8000</code>). <code>drivers/vbe.c</code> sets a real linear
+    framebuffer through the Bochs/QEMU VBE "DISPI" extension — a pair of
+    16-bit I/O ports (<code>0x1CE</code> index, <code>0x1CF</code> data)
+    that select and set mode registers directly, no VESA BIOS calls
+    needed. That matters specifically because BIOS calls require real or
+    unreal mode, and this kernel is already deep in 64-bit long mode by
+    the time any driver runs — DISPI sidesteps the whole problem by being
+    a hardware interface reachable with the same plain port I/O every
+    other port-mapped driver here already uses.
+</p>
+<p>
+    The framebuffer's real physical base address comes from the VGA-class
+    PCI device's own BAR0 — <code>vbe_init()</code> scans the existing
+    <code>pci_enumerate()</code> device list for class code <code>0x03</code>
+    (display controller) rather than assuming a fixed slot, then reuses
+    <code>pci_read_bar0()</code> and <code>mm/paging.c</code>'s
+    <code>map_page()</code> exactly the way <a href="#e1000">the e1000
+    driver</a> already established for its own MMIO registers — the same
+    discover-then-map pattern, applied to a second kind of device.
+</p>
+<p>
+    Verified with real hardware round trips, not just "a write didn't
+    crash": after requesting an 800x600, 32-bit-per-pixel mode, the
+    XRES/YRES/BPP registers are read back <em>from the device itself</em>
+    (<code>0x320</code>/<code>0x258</code>/<code>0x20</code>) — proving
+    the hardware genuinely latched the requested mode, not just that
+    bytes were sent to a port with nothing listening. A background fill
+    and a contrasting rect are drawn, then read back pixel-by-pixel
+    afterward, including the exact corner pixels just inside and just
+    outside the rect boundary — confirming precise placement, not just
+    "something got drawn somewhere". A real QEMU <code>screendump</code>
+    capture independently confirmed the same image visually: a solid
+    background with the rect in the expected position and color.
+</p>
+<p>
+    Deliberately narrow, matching this kernel's usual first step for a
+    new subsystem: only <code>fb_put_pixel</code>/<code>fb_get_pixel</code>/
+    <code>fb_fill_rect</code> exist — no lines, circles, images, fonts, or
+    double buffering — the mode itself is fixed at one hardcoded
+    resolution, and there's no ring3-facing syscall yet, only the
+    kernel-mode <code>fb</code> shell command. See <a href="#limitations">Known
+    limitations</a>.
+</p>
+
 <h2 id="arp">A real ARP resolver</h2>
 <p>
     A genuine resolver, built directly on the proven TX/RX plumbing.
@@ -1173,6 +1221,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
 <li><strong>PCI enumeration is bus 0 only</strong> (see <a href="#pci">Hardware discovery: PCI</a>) — no bridge recursion, no general driver-registration framework. <code>disk/ata.c</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> finds that exact same controller.</li>
 <li><strong>ARP is client-only</strong> (no responder), with no cache eviction/TTL. This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. <strong>ICMP is the only IP-layer protocol implemented</strong>, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no record types beyond A — it exists purely as an external test vehicle for UDP (<code>dns_resolve_a()</code>, used for TCP's own target resolution, does real answer-section parsing but still only ever asks for one A record, no retry, no multiple questions). <strong>TCP</strong> (see <a href="#tcp">A real TCP client</a>) is client-only — no listening/server side — with a real but small <a href="#tcp-connections">connection table</a> (4 slots), no retransmission or congestion control at all (a lost segment just times out), no options (no window scaling, no SACK), and close is best-effort only. The e1000's TX/RX rings are fixed-size (8 descriptors each), and both poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
+<li><strong>The framebuffer (see <a href="#graphics">A real graphics framebuffer</a>) is a single fixed 800x600x32 mode</strong>, set once via a kernel-mode shell command with no ring3-facing syscall at all yet. Only pixel put/get and a filled-rect primitive exist — no lines, circles, images, fonts/text, or double buffering, and no resolution/mode negotiation beyond the one hardcoded request.</li>
 </ul>
 
 </main>

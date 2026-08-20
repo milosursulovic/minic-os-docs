@@ -88,6 +88,11 @@
 <li><strong>Ring3 networking, asynchronous from the start</strong> — every network operation above used to be a kernel-mode shell command only; a process can now issue a real ICMP ping, a real DNS resolve, or a real TCP fetch (a full handshake, request, receive loop, and close, as one atomic operation) and get back a handle immediately. Ping and DNS share one worker task and pool; TCP gets its own, since a full fetch runs several times longer than either and sharing would let it stall a pending ping or DNS request. The two async network operations compose, too — a process can resolve a hostname asynchronously, then feed the result straight into an async TCP fetch. Verified: several real prints from the calling process land between issuing each operation and waiting for it; the ping resolves with a genuine successful round trip to QEMU's real gateway; the DNS resolve gets back a real IP for a real hostname; and the chained resolve-then-fetch genuinely reaches a real internet host and gets back a complete, real <code>HTTP/1.1 200 OK</code> response.</li>
 </ul>
 
+<h2>Graphics</h2>
+<ul>
+<li><strong>A real linear framebuffer</strong> — the first graphics capability this kernel has ever had, previously VGA text mode only. Set through the Bochs/QEMU VBE "DISPI" port interface (no VESA BIOS calls needed, since this kernel is already in 64-bit long mode by the time any driver runs), with the framebuffer's real physical address discovered from the VGA PCI device's own BAR0 — the same discover-then-map pattern <a href="reference.html#e1000">the e1000 driver</a> already established, reused for a second kind of device. Verified with real hardware round trips: the resolution/depth registers are read back from the device itself after being set, a background fill and a rect drawn on top of it are read back pixel-by-pixel afterward — including the exact boundary pixels just inside and outside the rect — and a real QEMU screen capture independently confirmed the same image. See <a href="reference.html#graphics">A real graphics framebuffer</a>.</li>
+</ul>
+
 <h2 id="rewrite">Language history</h2>
 <p>
     This kernel was originally built in MiniC, a small hand-rolled
@@ -125,6 +130,13 @@
     already sit underneath ping/DNS/TCP). The narrower gaps are
     documented on the <a href="reference.html#limitations">Known
     limitations</a> section of the Architecture page.
+</p>
+<p>
+    A real graphics framebuffer now exists too (see <a href="#graphics">Graphics</a>
+    above) - the first prerequisite for eventual GUI/desktop work, still
+    early: one fixed resolution, pixel primitives only, no input beyond
+    the keyboard. A mouse driver is the natural next step in that
+    direction, not yet started.
 </p>
 <p>
     Self-hosting used to be framed as "the compiler compiled for this
