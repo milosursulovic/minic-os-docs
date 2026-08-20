@@ -322,6 +322,45 @@ shell/            the interactive shell
     bit-for-bit the same physical frame the first spawn's exit had just
     freed - real reuse, not coincidence.
 </p>
+<p>
+    Milestone 40 closes the remaining gap: <code>spawn_process()</code>
+    and <code>create_task_with_cr3()</code> now search for an exited
+    slot before appending, so the process/task table no longer only
+    ever grows. <code>create_task_with_cr3()</code> changed from
+    <code>bool</code> to <code>int</code> (the real task index, or -1) -
+    a reused slot's index can't be inferred as "whatever the counter
+    currently is" the way an always-appended one could. That surfaced
+    two real, previously-latent bugs: a pre-computed
+    <code>task_index = g_task_count</code> in <code>process.c</code>
+    would have used the wrong index once reuse landed, and
+    <code>create_isolated_task()</code>'s bare
+    <code>return create_task_with_cr3(...)</code> implicitly converted
+    <code>-1</code> (failure) to <code>true</code> (nonzero is truthy) -
+    silently reporting success on failure. Both fixed by using the real
+    returned index. A reused task slot reuses its <em>old</em> kalloc'd
+    kernel stack directly rather than allocating a fresh one - just
+    reinitializes the fake switch-frame at the top of the same block -
+    sidestepping "freeing your own currently-executing stack from
+    within itself" entirely instead of solving it, and meaning reuse
+    doesn't leak heap memory either. <code>spawn_process()</code> also
+    clears the reused slot's handle table first, since a stale "handle
+    0" from the previous occupant would otherwise break the "handle 0 =
+    myself" convention for the new one.
+</p>
+<p>
+    A real regression was found and fixed during this milestone's own
+    testing, never shipped: an early version had <code>init</code>
+    restart <code>hello_service</code> 2-3 times in a loop for a more
+    dramatic reuse proof, but each restart also costs a
+    <code>g_objects[8]</code> slot for the query handle - looping that
+    aggressively exhausted the shared, still-unreclaimed object table
+    and broke the <em>original</em> boot-time demo process's own
+    unrelated <code>Channel.open()</code> call, cascading into several
+    other spurious failures downstream. Reverted to a single restart,
+    which already proves reuse cleanly (the same <code>task_index</code>
+    comes back every time) without touching that shared budget any
+    harder than milestone 38 already did.
+</p>
 
 <h2 id="ipc">IPC (channels)</h2>
 <p>
@@ -925,7 +964,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <ul>
 <li><s>The shared identity-map/heap region is still fully user-accessible</s> — <strong>fixed in milestone 26</strong>: a cloned address space's copy of <code>PDPT[0]</code>/<code>PDPT[1]</code> has the user bit stripped, verified with a real forbidden-write page fault (see <a href="#memory-protection">Memory protection</a>). Real isolation now covers both the private per-process region <em>and</em> direct ring3 access to the shared one — everything ring3 code still legitimately needs there goes through a syscall instead.</li>
 <li><strong>Pointer arguments (paths, buffers) are checked for validity/bounds but not ownership</strong> — nothing stops a ring3 process from passing a pointer that doesn't actually belong to it. Both <code>channel</code> (milestone 25) and <code>process</code> (milestone 27) handles are now real, rights-checked capabilities (see <a href="#capabilities">Capabilities &amp; rights</a>) — but <code>process</code> only has one real right (<code>RIGHT_QUERY</code>) to enforce so far, since there's no second Process operation (like a real terminate/kill) yet to need a second one.</li>
-<li><s>No process teardown/exit exists at all</s> — <strong>fixed in milestone 37</strong> (see <a href="#process-model">Process model &amp; isolation</a>): a real <code>process_exit</code> syscall, verified with <code>ps</code>'s own <code>exited=0x</code> field. <s>Nothing is reclaimed when a process exits</s> — <strong>frames fixed in milestone 39</strong>: image, stack, and page-table frames plus the process's own PML4/PDPT are all freed, verified against exact frame-count arithmetic. <strong>Still open</strong>: the process/task table <em>slot</em> itself stays occupied forever (so a long-running system that spawns and exits many processes will eventually hit the fixed table caps below, even though the memory itself no longer leaks), the task's own kalloc'd kernel stack isn't freed either (a genuinely riskier problem - freeing your own currently-executing stack from within itself), and any handle still pointing at an exited process stays valid but now points at something that will never run again.</li>
+<li><s>No process teardown/exit exists at all</s> — <strong>fixed in milestone 37</strong> (see <a href="#process-model">Process model &amp; isolation</a>): a real <code>process_exit</code> syscall, verified with <code>ps</code>'s own <code>exited=0x</code> field. <s>Nothing is reclaimed when a process exits</s> — <strong>frames fixed in milestone 39</strong>: image, stack, and page-table frames plus the process's own PML4/PDPT are all freed, verified against exact frame-count arithmetic. <s>The process/task table slot stays occupied forever</s> — <strong>fixed in milestone 40</strong>: the next spawn reuses an exited slot (and its already-allocated kernel stack) instead of growing the table, verified across repeated restart cycles never growing <code>ps</code>'s process count. <strong>Still open</strong>: <code>g_objects[8]</code> (the kernel object table) isn't reclaimed at all - an exited process's self-object and any handle anyone opened to it stay allocated forever, a real, separate cap now easier to hit than the process/task tables since those reuse slots (confirmed the hard way during milestone 40's own testing: an over-eager restart loop exhausted it and broke an unrelated process's own <code>Channel.open()</code> call). Any handle still pointing at an exited-then-reused process slot now points at a <em>different, live</em> process, not just a frozen dead one - a sharper, more real version of the same "no ownership on handles" gap elsewhere on this list.</li>
 <li><strong><code>spawn_builtin</code>'s program registry is a single fixed, compile-time entry</strong> (<code>hello_service.c</code>) — nothing can register a new spawnable program at runtime, and nothing yet bridges "a real service lives on disk" to this specific mechanism (that's still the separate <code>spawn_process_from_path()</code>/syscall 6 path). <code>init.c</code> restarts its one service exactly once (milestone 38) — a real restart-on-exit proof, but not a real supervisor: no restart limit/backoff, no dependency ordering, and a second restart would fail outright once the fixed 4-slot process table fills (see the process-table limitation below).</li>
 <li><s>No NX (no-execute) enforcement anywhere</s> — <strong>fixed in milestone 28</strong> for every dynamically-mapped pure-data region, including every ring3 process's own user stack (see <a href="#memory-protection">Memory protection</a>). <strong>Still open</strong>: a loaded ring3 program's own code+data image stays entirely executable — the loader flattens a whole compiled program into one contiguous blob with no tracked code/data boundary, so a real W^X split <em>within</em> a loaded image is a separate, larger problem. ASLR and true process sandboxing (beyond the address-space isolation that's existed since milestone 12) remain two more genuinely different, completely unscoped mechanisms — not silently forgotten, just not yet tackled.</li>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
