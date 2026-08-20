@@ -769,6 +769,53 @@ int close(int fd);</code></pre>
     captured output.
 </p>
 
+<h2 id="tcp">A real TCP client</h2>
+<p>
+    Milestone 35 adds real TCP — the first genuinely stateful transport
+    protocol in this kernel, and the first time any protocol layer here
+    has talked to a host off the local SLIRP subnet (every earlier
+    target was the gateway at <code>10.0.2.2</code> or the DNS proxy at
+    <code>10.0.2.3</code>, both local). A real internet host doesn't
+    answer ARP requests from this guest at all, so <code>net/tcp.c</code>'s
+    <code>tcp_fetch()</code> ARP-resolves the <em>gateway's</em> MAC for
+    the Ethernet-level destination while putting the real remote IP in
+    the IP header itself — routing, not resolution, decides an
+    off-subnet frame's link-layer destination, the same distinction
+    every real router relies on and the one genuinely new wrinkle this
+    milestone had to get right that no earlier layer here ever needed to.
+</p>
+<p>
+    <code>tcp_checksum()</code> follows the identical pseudo-header shape
+    <code>udp_checksum()</code> already established (protocol number 6
+    instead of 17). <code>tcp_fetch()</code> is deliberately scoped as a
+    client only, one connection at a time, no connection table, no
+    retransmission or congestion control — a real 3-way handshake (SYN,
+    wait for a genuinely matching SYN-ACK with the right ACK number, then
+    ACK), a real data segment carrying an actual HTTP/1.1 request, a
+    receive loop that ACKs each arriving segment and keeps polling until
+    the peer's FIN or the caller's buffer fills, and a best-effort
+    graceful close that isn't required for the milestone's own success
+    criterion. <code>net/dns.c</code> gained a real <code>dns_resolve_a()</code>
+    alongside the existing <code>dns_query()</code> — it actually parses
+    the answer section (a DNS-compression name pointer or a literal one,
+    skipping past a CNAME if one leads) instead of only checking the
+    header, so the TCP demo's target is a freshly-resolved real IP, not
+    a hardcoded address that could go stale.
+</p>
+<p>
+    Verified in QEMU, twice, independently: two different real IPs for
+    <code>example.com</code> (Cloudflare's own round-robin DNS, both
+    confirmed via a real <code>curl</code> from the same environment) —
+    <code>tcp_fetch_ok=0x1 response_len=0x200 got_http_status=0x1</code>
+    both times, a complete handshake, a full 512-byte real HTTP response
+    (the receive buffer's own cap — the real reply was at least that
+    long), and a confirmed real <code>HTTP</code> status line at the
+    start of it, not just "some bytes arrived." <code>tasks</code> run
+    immediately afterward confirmed the scheduler and every other kernel
+    task stayed healthy through the exchange. See the
+    <a href="examples.html">Walkthrough</a> for the real captured output.
+</p>
+
 <h2 id="testing">Testing methodology</h2>
 <p>
     Every claim in this project is backed by a concrete, checkable
@@ -802,7 +849,7 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
 <li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.c</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
-<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arp_resolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. No TCP — a substantially bigger, genuinely separate hard problem (real connection state machine, sequence numbers, retransmission), still fully ahead. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no compression-pointer decoding, no record types beyond A — it exists purely as an external test vehicle for UDP. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
+<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arp_resolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. <s>No TCP</s> — <strong>fixed in milestone 35</strong> (see <a href="#tcp">A real TCP client</a>): a real 3-way handshake, real data exchange, and a genuine HTTP round trip to an actual internet host. <strong>Still open</strong>: no retransmission or congestion control at all (a lost segment just times out), client-only (no listening/server side), one connection at a time with no connection table, no options (no window scaling, no SACK), and close is best-effort only. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no record types beyond A — it exists purely as an external test vehicle for UDP (<code>dns_resolve_a()</code>, added for TCP's own real target resolution, does real answer-section parsing but still only ever asks for one A record, no retry, no multiple questions). The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
 </ul>
 
 </main>

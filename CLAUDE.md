@@ -6,12 +6,14 @@ walkthrough, roadmap, and a downloads page for the MiniC OS kernel.
 Intended for GitHub Pages or Cloudflare Pages, same as the compiler's
 docs site.
 
-This repo is one of four siblings under `d:\Projects\minic` — see
-`../CLAUDE.md` for the multi-repo layout. It documents `../os/` (the
+This repo is one of two siblings under `d:\Projects\minic` — see
+`../CLAUDE.md` for the workspace layout. It documents `../os/` (the
 kernel repo) specifically; it has no build dependency on it, but its
 `downloads/` folder holds binaries *built from* it (see below). The
-compiler's own docs site (`../docs/`) intentionally does **not** carry
-detailed kernel content — that all lives here instead.
+MiniC compiler and its own docs site (formerly `../compiler/`/`../docs/`)
+were retired and deleted once the kernel was rewritten into hand-written
+C - there's no separate compiler docs site anymore for this one to
+avoid duplicating.
 
 ## Structure
 
