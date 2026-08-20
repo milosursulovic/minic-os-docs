@@ -43,7 +43,7 @@
         with <code>qemu-system-x86_64 -kernel minic-kernel.elf</code>.
         QEMU understands multiboot1 natively, so this is QEMU-only — for
         anything else, use the bootable ISO instead.</p>
-        <p class="meta">.elf, ~90 KB</p>
+        <p class="meta">.elf, ~70 KB</p>
         <a class="download-btn" href="downloads/minic-kernel.elf">Download →</a>
     </div>
     <div class="card">
@@ -53,7 +53,7 @@
         boots in VirtualBox, VMware, or from a USB stick on real hardware,
         not just QEMU. See <a href="install.html#other-hypervisors">Getting
         Started</a> for VirtualBox setup.</p>
-        <p class="meta">.iso, ~5.4 MB</p>
+        <p class="meta">.iso, ~5.3 MB</p>
         <a class="download-btn" href="downloads/minic-os.iso">Download →</a>
     </div>
 </div>
@@ -67,11 +67,11 @@
 
 <h2>Building it yourself</h2>
 <p>
-    MiniC OS is written in MiniC and compiled with a Linux-built
-    <code>minicc</code> from the
-    <a href="https://github.com/milosursulovic/minic">MiniC compiler repo</a>
-    — see <a href="install.html#build-from-source">Getting Started</a> for
-    the full setup. It's one script once the toolchain is in place:
+    MiniC OS is hand-written in freestanding C and built with an ordinary
+    Linux GCC toolchain (<code>gcc</code>/<code>as</code>/<code>ld</code>/
+    <code>objcopy</code>) — no separate compiler checkout needed — see
+    <a href="install.html#build-from-source">Getting Started</a> for the
+    full setup. It's one script once the toolchain is in place:
 </p>
 <pre><code>./build.sh          # kernel.elf
 ./build.sh iso       # + a bootable minic-os.iso</code></pre>
@@ -79,8 +79,9 @@
 </main>
 
 <footer>
-    MiniC OS is a hobby kernel project, written in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    MiniC OS is a hobby kernel project, hand-written in freestanding C
+    (originally built in MiniC through milestone 34 — see the
+    <a href="roadmap.html">Roadmap</a>). Source on
     <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 

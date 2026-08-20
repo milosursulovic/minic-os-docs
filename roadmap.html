@@ -31,9 +31,12 @@
     concrete assertion in QEMU, then shipped — not designed far in
     advance. The long-term architecture (a UNIX namespace/shell + NT-style
     kernel objects/handles + microkernel-ish IPC/service isolation + a
-    capability security model, exposed through a native MiniC API with a
+    capability security model, exposed through a native API with a
     POSIX compatibility layer on top) is planned in phases, each becoming
-    a real numbered milestone when its turn comes.
+    a real numbered milestone when its turn comes. Milestones 1 through 34
+    were built in MiniC, a hand-rolled language with its own compiler;
+    right after milestone 34 shipped, the kernel was rewritten by hand
+    into freestanding C — see that entry below for the real, dated story.
 </p>
 
 <h2>Milestones 1–10: the foundation</h2>
@@ -107,6 +110,7 @@
 <li><strong>32: a real ARP resolver</strong> <span class="tag">done</span> — Phase X's fourth step, replacing milestone 31's own hardcoded one-shot request/reply with a genuine resolver built on the proven TX/RX plumbing. New <code>net/arp.mc</code>: a fixed-size cache (<code>ArpEntry[8]</code>), <code>arp_resolve(ip, mac_out)</code> checks the cache first and only sends a real request on a miss, polling for a genuinely matching reply against a real <code>g_tick_count</code>-bounded timeout. Deliberately scoped as a client (resolver) only, not a responder — this kernel has no assigned IP address of its own yet. The shell's <code>arp</code> command (same name, now backed by the real mechanism) runs four checks: resolve the gateway (a real external round trip, non-trivial elapsed ticks), resolve it again (zero elapsed ticks — a real, timing-based proof of the cache), resolve a second, different real address (QEMU SLIRP's own DNS proxy, <code>10.0.2.3</code> — proving genuine generalization, not one fixed IP), and resolve an address nothing answers for (correctly returns false after the real timeout, not a hang). A full regression pass (heap, paging, scheduler, <code>pci</code>, <code>nic</code>, <code>disk</code>/<code>diskwrite</code>) stayed clean. See the <a href="reference.html#arp">Architecture</a> page and the <a href="examples.html">Walkthrough</a> for the real captured output.</li>
 <li><strong>33: a real IPv4 layer, verified with a genuine ICMP echo (ping) round trip</strong> <span class="tag">done</span> — Phase X's fifth step, and the first milestone to give this kernel a real, explicit concept of "my IP address" (<code>net/ip.mc</code>'s <code>g_my_ip</code>, previously a bare literal duplicated inside <code>net/arp.mc</code>'s own request-building code, now one shared, named value both files use). New <code>net/ip.mc</code>: <code>ip_checksum()</code> (the real RFC 791 one's-complement checksum, also reused for ICMP) and <code>ip_build_header()</code> (a real 20-byte, no-options IPv4 header). New <code>net/icmp.mc</code>: <code>icmp_ping()</code> — the minimal, natural verification vehicle for "does IP genuinely work end to end," the same relationship milestone 31's hardcoded ARP request had to proving TX/RX worked at all. Resolves the target's MAC via milestone 32's real <code>arp_resolve()</code> first, builds a real Ethernet+IPv4+ICMP echo request, sends it, and polls (real <code>g_tick_count</code>-bounded) for a reply matching on every real field: EtherType, IP protocol, source IP, ICMP type, and the exact identifier/sequence number sent. Verified in QEMU: <code>ping gateway ok=0x1 elapsed_ticks=0x64</code> — a genuine reply from QEMU's real network stack, the same non-trivial round-trip time <code>arp</code> already measured, no bugs found (the hard, novel risk was already absorbed by milestones 31/32; this one cleanly applied already-proven mechanisms to a new protocol layer). A full regression pass (heap, paging, scheduler, <code>pci</code>, <code>arp</code>'s own continued correctness after the <code>g_my_ip</code> refactor) stayed clean. See the <a href="reference.html#ip">Architecture</a> page and the <a href="examples.html">Walkthrough</a> for the real captured output.</li>
 <li><strong>34: a real UDP layer, verified with a genuine DNS query</strong> <span class="tag">done</span> — Phase X's sixth step. UDP is the simpler of the two remaining transport protocols — no connection state, no retransmission/congestion control, just a port-addressed datagram wrapper over the now-working IP layer. New <code>net/udp.mc</code>: <code>udp_checksum()</code> (the real pseudo-header algorithm, reusing <code>ip.mc</code>'s <code>ip_checksum()</code> unchanged) and <code>udp_send()</code>/<code>udp_receive()</code> (the same resolve-then-send-then-poll shape milestone 33's ICMP code already established). New <code>net/dns.mc</code>: <code>dns_query()</code> — a minimal, hand-crafted DNS query, deliberately not a real DNS client, purely as a real external verification vehicle for UDP, the same "one hardcoded real-protocol message" discipline ARP's request and ICMP's ping both already used. Sent to QEMU SLIRP's own built-in DNS proxy (<code>10.0.2.3</code>) and verified on the exact transaction ID, the response bit, and a real answer count. Verified in QEMU: <code>dns query ok=0x1 elapsed_ticks=0x74</code> — noticeably higher than <code>ping</code>'s own <code>elapsed_ticks=0x64</code>, a real, sensible detail (DNS genuinely takes one more hop than ICMP echo). No bugs in the protocol logic itself — only two ordinary MiniC type-mismatch compile errors, fixed by restructuring. A full regression pass (heap, paging, scheduler, <code>pci</code>, <code>ping</code>'s own continued correctness) stayed clean. See the <a href="reference.html#udp">Architecture</a> page and the <a href="examples.html">Walkthrough</a> for the real captured output.</li>
+<li id="rewrite"><strong>The MiniC → C rewrite</strong> <span class="tag">done</span> — right as TCP was about to get its own dedicated scoping pass, the decision was made to retire MiniC (and its own compiler/docs repos) entirely and rewrite this whole kernel by hand into freestanding C, for faster day-to-day development going forward. Every one of the ~34 source files (and the shell, kept around one stage longer than the rest purely as a porting reference) was rewritten and independently re-verified in QEMU against its own already-known-good milestone output before being deleted — not a bulk mechanical translation trusted on faith. One real, C-specific bug was found and fixed: <code>spawn_process()</code>'s "jump to byte 0 of the loaded image" loader assumed the entry function always lands first — true for MiniC's own single-pass codegen, but not for gcc, which laid out the ring3 program's functions in a different order — fixed with a dedicated linker section pinning <code>_start</code> to offset 0 regardless of source order. Everything else carried over unchanged in behavior: same architecture, same milestones, same verification bar, same "no external libraries" rule — only the implementation language changed. See the <a href="https://github.com/milosursulovic/minic-os">kernel repo's own README</a> for the full writeup and one commit per rewrite stage.</li>
 <li>Next: TCP — a substantially bigger, genuinely separate hard problem (real connection state machine, sequence numbers, retransmission) deserving its own dedicated scoping pass.</li>
 </ul>
 
@@ -115,11 +119,16 @@
 <li><strong>Phase XI — service architecture + a real <code>init</code></strong> — the current hardcoded shell loop migrates to an actual userspace program once processes/IPC/VFS exist to support that; async I/O as a cross-cutting pass once sync I/O works everywhere.</li>
 </ul>
 <p>
-    Self-hosting (<code>minicc</code>, compiled for MiniC OS's own target,
-    running <em>on</em> MiniC OS to compile something) isn't one of these
-    phases — it's an ongoing checkpoint tried after each major phase, with
-    the real prerequisites (native API, real file I/O, real process
-    spawning) already in place as of Phase VIII.
+    Self-hosting used to be framed as "<code>minicc</code> compiled for
+    MiniC OS's own target, running <em>on</em> MiniC OS to compile
+    something" — that goal doesn't carry over as-is now that MiniC itself
+    is retired (see <a href="#rewrite">the MiniC → C rewrite</a> above);
+    getting a real C toolchain running natively on this kernel is a
+    substantially bigger undertaking than porting one small hand-rolled
+    compiler was, and isn't a near-term goal. The real prerequisites this
+    kernel already has either way (native API, real file I/O, real
+    process spawning) mean the door isn't closed — just not something to
+    plan around until much later.
 </p>
 
 <h2>Known limitations</h2>
@@ -131,9 +140,9 @@
 </main>
 
 <footer>
-    MiniC OS is a hobby kernel project, written in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
-    <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
+    MiniC OS is a hobby kernel project, hand-written in freestanding C
+    (originally built in MiniC through milestone 34 — see above). Source
+    on <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 
 </body>

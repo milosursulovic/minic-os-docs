@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MiniC OS — a kernel written in MiniC, from scratch</title>
-<meta name="description" content="MiniC OS is a multiboot1 x86-64 kernel written almost entirely in MiniC, a hand-written systems language with no LLVM. Ring 3 processes, a native object/handle model, IPC, a real filesystem, and a POSIX-shaped API.">
+<title>MiniC OS — a hand-written x86-64 kernel</title>
+<meta name="description" content="MiniC OS is a multiboot1 x86-64 kernel, hand-written from scratch in freestanding C (originally built in a hand-rolled language called MiniC through milestone 34). Ring 3 processes, a native object/handle model, IPC, a real filesystem, PCI/e1000 networking, and a POSIX-shaped API.">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -24,15 +24,21 @@
 
 <main>
 
-<div class="kicker">A kernel, written in MiniC</div>
+<div class="kicker">A kernel, hand-written from scratch</div>
 <h1>MiniC OS</h1>
 <p class="lede">
-    A multiboot1 x86-64 kernel written almost entirely in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a> — a small,
-    hand-written systems language with its own compiler, no LLVM. The only
-    hand-written assembly is what's genuinely below what a MiniC function
-    body can express: the 32-to-64-bit boot transition, interrupt entry
-    stubs, and context switching.
+    A multiboot1 x86-64 kernel, every subsystem hand-written from scratch —
+    no external libraries. Originally built through milestone 34 in MiniC,
+    a small hand-rolled systems language with its own compiler, no LLVM;
+    then rewritten by hand into freestanding C for faster day-to-day
+    development, one subsystem at a time, each independently re-verified
+    in QEMU before the MiniC original was deleted — same architecture,
+    same milestones, same verification bar, only the implementation
+    language changed. See the <a href="roadmap.html">Roadmap</a> for that
+    rewrite as a real, dated entry. The only hand-written assembly today
+    is what's genuinely below what a C function body can express: the
+    32-to-64-bit boot transition, interrupt entry stubs, and context
+    switching.
 </p>
 
 <div class="code-label">a real shell session</div>
@@ -54,7 +60,7 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
     Every one of those commands is backed by a real subsystem, not a stub:
     a free-list heap over a physical frame allocator, real dynamic
     PML4/PDPT/PD/PT paging, a preemptive scheduler, a custom on-disk
-    filesystem, and a real process loader — all written in ordinary MiniC,
+    filesystem, and a real process loader — all hand-written from scratch,
     all verified in QEMU with a concrete, checkable assertion for every
     claim (an exact byte count, a register readback, a physical address
     that genuinely differs between two isolated processes), never just
@@ -63,15 +69,19 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
 
 <h2>Where this fits</h2>
 <p>
-    MiniC OS is the kernel-phase destination of the
-    <a href="https://github.com/milosursulovic/minic">MiniC compiler</a>
-    project — the point where the language stops being exercised by small
-    demo programs and starts being exercised by a real kernel with real
-    constraints (no libc, no register allocator, no forward declarations).
-    Every real language gap MiniC OS surfaced (char literals, <code>char</code>
+    MiniC OS started as the kernel-phase destination of a hand-rolled
+    systems language project called MiniC — the point where the language
+    stopped being exercised by small demo programs and started being
+    exercised by a real kernel with real constraints (no libc, no register
+    allocator, no forward declarations). Every real language gap MiniC OS
+    surfaced through milestone 34 (char literals, <code>char</code>
     arithmetic, <code>break</code>/<code>continue</code>, 2D arrays,
-    <code>const</code>, and eventually real <code>obj.method()</code> syntax)
-    got fixed as a real compiler feature, not worked around and forgotten.
+    <code>const</code>, and eventually real <code>obj.method()</code>
+    syntax) got fixed as a real compiler feature, not worked around and
+    forgotten. Once day-to-day development speed became the priority,
+    MiniC and its compiler were retired and the kernel was rewritten by
+    hand into freestanding C — see the <a href="roadmap.html">Roadmap</a>
+    for that rewrite as a real, dated milestone, not rewritten history.
 </p>
 
 <h2>What's already real</h2>
@@ -139,12 +149,14 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
         a loopback, not self-validation.</p>
     </div>
     <div class="card">
-        <h3>Compiled MiniC running in ring 3</h3>
-        <p>Ring 3 processes are real, <code>minicc</code>-compiled MiniC
-        programs — not hand-assembled blobs — using real
-        <code>obj.method()</code> syntax against a native <code>File</code>/
-        <code>Channel</code>/<code>Process</code> API, plus a thin
-        POSIX-shaped <code>open</code>/<code>read</code>/<code>write</code>/
+        <h3>Compiled C running in ring 3</h3>
+        <p>Ring 3 processes are real, gcc-compiled programs — not
+        hand-assembled blobs — using this kernel's own C-shaped native API
+        (<code>file_write(&amp;self, ...)</code>, <code>channel_send(...)</code>,
+        <code>process_spawn(...)</code> — a plain function taking an
+        explicit <code>self</code> pointer, C's own shape for what used to
+        be <code>self.method(...)</code> sugar), plus a thin POSIX-shaped
+        <code>open</code>/<code>read</code>/<code>write</code>/
         <code>close</code> shim layered on top.</p>
     </div>
 </div>
@@ -161,8 +173,9 @@ processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
 </main>
 
 <footer>
-    MiniC OS is a hobby kernel project, written in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    MiniC OS is a hobby kernel project, hand-written in freestanding C
+    (originally built in MiniC through milestone 34 — see the
+    <a href="roadmap.html">Roadmap</a>). Source on
     <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 

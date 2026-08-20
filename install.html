@@ -99,40 +99,44 @@
 
 <h2 id="build-from-source">2. Building from source</h2>
 <p>
-    MiniC OS is written in MiniC, compiled by <code>minicc</code> from the
-    <a href="https://github.com/milosursulovic/minic">MiniC compiler repo</a>
-    — you need a <strong>Linux-built</strong> <code>minicc</code> even if
-    you're doing everything else on Windows, since the kernel's own build
-    toolchain (<code>as</code>/<code>ld</code>/<code>grub-mkrescue</code>)
-    is Linux-only. WSL works fine for this on Windows.
+    MiniC OS is hand-written in freestanding C (originally built in a
+    hand-rolled language called MiniC through milestone 34, then rewritten
+    by hand into C — see the <a href="roadmap.html">Roadmap</a>). Building
+    it needs a real GCC toolchain (developed against gcc 15) — no separate
+    compiler checkout, no sibling repo, just <code>gcc</code>/
+    <code>as</code>/<code>ld</code>/<code>objcopy</code>. The toolchain
+    needs to be Linux's, even if you're doing everything else on Windows —
+    WSL works fine for this.
 </p>
-<pre><code>sudo apt install build-essential cmake   # if not already installed
-
-git clone git@github.com:milosursulovic/minic.git
-cd minic
-cmake -S . -B build-linux
-cmake --build build-linux
-cd ..
+<pre><code>sudo apt install build-essential   # gcc/as/ld/objcopy, if not already installed
 
 git clone git@github.com:milosursulovic/minic-os.git
 cd minic-os
 ./build.sh</code></pre>
 <p>
-    <code>build.sh</code> looks for <code>minicc</code> at
-    <code>../compiler/build-linux/minicc</code> by default (matching the
-    sibling-checkout layout above — clone the compiler into a folder named
-    <code>compiler</code> next to <code>minic-os</code>, or point
-    <code>MINICC</code> at wherever yours actually is):
+    This produces <code>kernel.elf</code>. <code>build.sh</code> is a thin
+    wrapper over a real <code>Makefile</code> — every <code>.c</code> file
+    compiles to its own object with real incremental rebuilds. Other
+    <code>build.sh</code> subcommands (each also runnable directly as
+    <code>make</code>/<code>make run</code>/<code>make disk</code>/
+    <code>make iso</code>):
 </p>
-<pre><code>MINICC=/path/to/minicc ./build.sh</code></pre>
-<p>This produces <code>kernel.elf</code>. Other <code>build.sh</code> subcommands:</p>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
-<tr><td><code>./build.sh</code></td><td>assembles the boot/interrupt/context-switch stubs, compiles+assembles <code>kmain.mc</code> and the ring3 program, links <code>kernel.elf</code></td></tr>
+<tr><td><code>./build.sh</code></td><td>assembles the boot/interrupt/context-switch stubs, compiles every <code>.c</code> file and the ring3 program, links <code>kernel.elf</code></td></tr>
 <tr><td><code>./build.sh run</code></td><td>also boots it in QEMU with a curses (in-terminal) display, building/attaching <code>disk.img</code> automatically</td></tr>
 <tr><td><code>./build.sh disk</code></td><td>(re)builds <code>disk.img</code> — a small, fixed 1MB test disk image, regenerated from scratch each time</td></tr>
 <tr><td><code>./build.sh iso</code></td><td>also packages a GRUB-bootable <code>minic-os.iso</code> — see <a href="#other-hypervisors">below</a></td></tr>
 </table>
+<div class="note">
+    Every <code>.c</code> file still assembles as a <strong>32-bit ELF
+    container</strong> even though its code runs in real 64-bit long mode
+    — QEMU's multiboot1 <code>-kernel</code> loader hard-rejects a genuine
+    ELF64 image. Each file compiles to assembly, gets a <code>.code64</code>
+    directive prepended, and is fed to <code>as --32</code>, which encodes
+    the 64-bit mnemonics correctly while keeping the ELF32 container. See
+    <a href="reference.html#boot">Architecture</a> for why.
+</div>
 
 <h2 id="other-hypervisors">3. Running outside QEMU (VirtualBox, VMware, real hardware)</h2>
 <p>
@@ -197,8 +201,9 @@ processes: 0x1 proc0 task=0x7 cr3=0x426000</code></pre>
 </main>
 
 <footer>
-    MiniC OS is a hobby kernel project, written in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    MiniC OS is a hobby kernel project, hand-written in freestanding C
+    (originally built in MiniC through milestone 34 — see the
+    <a href="roadmap.html">Roadmap</a>). Source on
     <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 

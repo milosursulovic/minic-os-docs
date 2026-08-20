@@ -27,23 +27,52 @@
 <div class="kicker">Architecture</div>
 <h1>How MiniC OS is built</h1>
 <p class="lede">
-    Almost everything past the boot transition is ordinary MiniC. The only
-    hand-written x86 assembly is what's genuinely below what a MiniC
-    function body (<code>asm("...")</code>, no operand binding, can't
-    reach a local variable) can express: program <em>structure</em>, not
-    logic.
+    Almost everything past the boot transition is ordinary, hand-written
+    freestanding C. The only hand-written x86 assembly is what's genuinely
+    below what a C function body (even real GCC inline asm, which has real
+    operand binding) can express: program <em>structure</em>, not logic —
+    the 32-to-64-bit boot transition, interrupt entry stubs, and context
+    switching.
 </p>
+<div class="note">
+    Milestones 1 through 34 (everything through the networking phase) were
+    built in MiniC, a small hand-rolled language with its own compiler.
+    Right after milestone 34 shipped, the whole kernel was rewritten by
+    hand into freestanding C for faster day-to-day development — the
+    architecture, milestones, and verification bar didn't change, only the
+    implementation language did. See the
+    <a href="roadmap.html">Roadmap</a> for that rewrite as a real, dated
+    entry. This page describes the kernel's <strong>current</strong> C
+    implementation throughout.
+</div>
 
 <h2 id="boot">Boot process</h2>
 <p>
-    Multiboot1 drops the kernel in 32-bit protected mode; MiniC only
-    targets x86-64. Getting from one to the other — loading a GDT,
+    Multiboot1 drops the kernel in 32-bit protected mode; this kernel runs
+    in 64-bit long mode. Getting from one to the other — loading a GDT,
     building page tables, enabling long mode, far-jumping into a 64-bit
     code segment — is hand-written in <code>boot/boot.s</code>, the same
     way every kernel project does it, even ones written in Rust or Zig.
     <code>boot/linker.ld</code> places the multiboot header and code at
     the conventional 1MB load address multiboot expects.
 </p>
+<div class="note">
+    QEMU's multiboot1 <code>-kernel</code> loader hard-rejects a genuine
+    ELF64 image ("Cannot load x86-64 image, give a 32bit one"), so every
+    object — hand-written <code>.s</code> and gcc-compiled <code>.c</code>
+    alike — still links as <code>ld -m elf_i386</code> even though the
+    code inside runs in real 64-bit long mode: each <code>.c</code> file
+    compiles to assembly, gets a literal <code>.code64</code> directive
+    prepended, and is fed to <code>as --32</code>, which encodes the
+    64-bit mnemonics correctly while keeping the ELF32 container format.
+    Two gcc flags this pipeline specifically needs: <code>-fPIC</code>
+    (otherwise a global's absolute 64-bit address needs a relocation type
+    unrepresentable in an ELF32 table) and <code>-fvisibility=hidden</code>
+    (otherwise a reference to an external symbol routes through the GOT
+    via an ELF64-only relocation syntax <code>as --32</code> can't parse —
+    every header wraps its declarations in
+    <code>#pragma GCC visibility push(hidden)</code>/<code>pop</code>).
+</div>
 <p>
     <code>boot.s</code> also owns the GDT/TSS setup: a ring3 code/data
     segment pair alongside the ring0 ones, and a TSS whose <code>RSP0</code>
@@ -57,79 +86,87 @@
     repoints it per-task on every context switch instead.
 </p>
 <p>
-    Once in 64-bit mode, <code>boot.s</code> calls MiniC's own entry point,
-    <code>_start()</code> in <code>kmain.mc</code> — everything past that
-    point is ordinary MiniC, using nothing the language's freestanding/
-    systems phase didn't already build (<code>volatile</code>,
-    <code>packed struct</code>, pointer arithmetic, and <code>asm(...)</code>
-    for the handful of raw instructions MiniC has no other way to express:
+    Once in 64-bit mode, <code>boot.s</code> calls the kernel's own entry
+    point, <code>_start()</code> in <code>kmain.c</code> — everything past
+    that point is ordinary freestanding C: <code>volatile</code>,
+    <code>packed struct</code>, pointer arithmetic, and real GCC inline
+    asm for the handful of raw instructions C has no other way to express:
     <code>out</code>/<code>in</code>/<code>lidt</code>/<code>sti</code>/
-    <code>invlpg</code>, reading <code>cr2</code>/<code>cr3</code>).
+    <code>invlpg</code>, reading <code>cr2</code>/<code>cr3</code>.
 </p>
 
 <h2 id="layout">Project layout</h2>
-<pre><code>kmain.mc          entry point (_start) + the imports wiring everything together
-boot/             hand-written assembly - below what asm(...) can express
+<p>
+    One <code>.c</code>/<code>.h</code> pair per subsystem — C has no
+    whole-program merge the way MiniC's own <code>import</code> did, so
+    each file's public surface is declared in its own header (wrapped in
+    <code>#pragma GCC visibility push(hidden)</code>/<code>pop</code>, see
+    <a href="#boot">above</a>). Milestone annotations below are real,
+    historical MiniC-era ship dates — the files themselves are C today.
+</p>
+<pre><code>types.h           shared typedefs (u8/u16/u32/u64/bool/...)
+kmain.c           entry point (_start) + the #includes wiring everything together
+boot/             hand-written assembly - below what a C function can express
   boot.s            multiboot header, 32-to-64-bit transition, GDT/TSS
-  interrupts.s       ISR/IRQ entry stubs (save/restore, call into MiniC)
+  interrupts.s       ISR/IRQ entry stubs (save/restore, call into C)
   linker.ld          places the multiboot header + code at the 1MB load address
 drivers/          hardware setup and I/O
-  io.mc              VGA text buffer, serial port, raw in/out port I/O.
+  io.c/.h            VGA text buffer, serial port, raw in/out port I/O.
                      outl/inl (32-bit) added milestone 29 for PCI config
                      space, which is dword-addressed
-  interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
-  keyboard.mc        scancode table + the shell's line buffer
-  pci.mc             milestone 29 (Phase X's first step): PCI bus
+  interrupts_init.c/.h IDT + 8259 PIC remap + PIT reconfiguration
+  keyboard.c/.h      scancode table + the shell's line buffer
+  pci.c/.h           milestone 29 (Phase X's first step): PCI bus
                      enumeration via CONFIG_ADDRESS/CONFIG_DATA, bus 0 only.
                      Milestone 30: pci_config_write_dword() (first PCI config
                      WRITE) and pci_read_bar0()
 net/              networking (milestone 30 onward)
-  e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
+  e1000.c/.h         the e1000 NIC driver - PCI enable, MMIO register
                      mapping, real MAC/link-status readback. Milestone
                      31: real TX/RX descriptor rings, a genuine packet
                      round trip verified via a hand-crafted ARP request
-  arp.mc             milestone 32: a real ARP resolver - a genuine
+  arp.c/.h           milestone 32: a real ARP resolver - a genuine
                      cache, arp_resolve() for any target address, client
                      (resolver) only, no responder
-  ip.mc              milestone 33: real IPv4 header build + the RFC 791
+  ip.c/.h            milestone 33: real IPv4 header build + the RFC 791
                      checksum, and g_my_ip - this kernel's own first
                      concept of "my IP address" (still static, no DHCP)
-  icmp.mc            milestone 33: icmp_ping() - a real echo request/
+  icmp.c/.h          milestone 33: icmp_ping() - a real echo request/
                      reply round trip, the verification vehicle for the
                      IP layer the same way ARP was for TX/RX
-  udp.mc             milestone 34: real UDP - udp_checksum() (the real
+  udp.c/.h           milestone 34: real UDP - udp_checksum() (the real
                      pseudo-header algorithm), udp_send()/udp_receive()
-  dns.mc             milestone 34: dns_query() - a minimal, hand-crafted
+  dns.c/.h           milestone 34: dns_query() - a minimal, hand-crafted
                      DNS query, the verification vehicle for UDP the
                      same way ICMP's ping was for IP. Not a real DNS
                      client
 mm/               memory management
-  heap.mc            kalloc/kfree free-list allocator, grows on demand
-  frames.mc          multiboot memory map parser + physical frame allocator
-  paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
+  heap.c/.h          kalloc/kfree free-list allocator, grows on demand
+  frames.c/.h        multiboot memory map parser + physical frame allocator
+  paging.c/.h        dynamic PML4/PDPT/PD/PT paging, per-process address
                      spaces, per-task TSS.RSP0
 lib/              no-libc helpers (streq/strlen/parse_hex/print_hex/...)
 isr/              interrupt dispatch (interrupt_handler)
 sched/            preemptive task scheduler
-  switch.s           hand-written context switch - below what asm(...) can express
-  task.mc            Task table, create_task/yield/sleep/channel_receive
+  switch.s           hand-written context switch - below what a C function can express
+  task.c/.h          Task table, create_task/yield/sleep/channel_receive
 syscall/          ring0/ring3 boundary
-  usermode.s         hand-written ring3 entry - below what asm(...) can express
-  syscall.mc         the syscall dispatcher (see the ABI table below)
+  usermode.s         hand-written ring3 entry - below what a C function can express
+  syscall.c/.h       the syscall dispatcher (see the ABI table below)
 proc/             process loading + the kernel object model + IPC
-  ring3prog.mc       the loaded ring3 program - real, minicc-compiled MiniC
-  ring3.ld           standalone linker script for ring3prog.mc's own link
+  ring3prog.c        the loaded ring3 program - real, gcc-compiled C
+  ring3.ld           standalone linker script for ring3prog.c's own link
   ring3blob.s        wraps the flattened blob in the loader's marker symbols
-  process.mc         Process table + the real loader
-  object.mc          KernelObject table + per-process handle tables
-  channel.mc         Channel table (single-slot mailboxes)
+  process.c/.h       Process table + the real loader
+  object.c/.h        KernelObject table + per-process handle tables
+  channel.c/.h       Channel table (single-slot mailboxes)
 disk/             storage
-  ata.mc             legacy ATA PIO driver - real sector read/write
-  minifs.mc          MiniFS: a minimal custom filesystem
-  vfs.mc             VFS: path -&gt; mount -&gt; backend routing
-  devfs.mc           the "/devices" backend - live kernel state, no disk
+  ata.c/.h           legacy ATA PIO driver - real sector read/write
+  minifs.c/.h        MiniFS: a minimal custom filesystem
+  vfs.c/.h           VFS: path -&gt; mount -&gt; backend routing
+  devfs.c/.h         the "/devices" backend - live kernel state, no disk
 shell/            the interactive shell
-  shell.mc           cmd* functions + the command dispatcher
+  shell.c/.h         cmd* functions + the command dispatcher
 </code></pre>
 
 <h2 id="memory-map">Memory map</h2>
@@ -160,10 +197,10 @@ shell/            the interactive shell
     <code>yield()</code> round-robins to the next non-blocked task —
     called voluntarily by cooperative tasks, and <em>also</em> called from
     inside the timer interrupt handler, which is what makes scheduling
-    preemptive: since the interrupt handler is just an ordinary nested
-    MiniC call on whichever task's stack the CPU happened to interrupt,
-    calling <code>yield()</code> from inside it suspends that call exactly
-    like a voluntary <code>yield()</code> would.
+    preemptive: since the interrupt handler is just an ordinary nested C
+    call on whichever task's stack the CPU happened to interrupt, calling
+    <code>yield()</code> from inside it suspends that call exactly like a
+    voluntary <code>yield()</code> would.
 </p>
 <p>
     <code>sleep(ticks)</code> adds real blocking: a task marks itself
@@ -293,7 +330,7 @@ const int RIGHT_RECEIVE = 4;</code></pre>
 <h2 id="memory-protection">Memory protection: the shared region, and NX</h2>
 <p>
     Milestone 26 closed a real gap: <code>clone_address_space()</code>
-    (<code>mm/paging.mc</code>) used to copy the kernel's own
+    (<code>mm/paging.c</code>) used to copy the kernel's own
     <code>PDPT[0]</code>/<code>PDPT[1]</code> entries into every new
     address space unchanged, including the user (<code>0x04</code>) bit —
     since x86 paging ANDs that bit across every level from PML4 down to
@@ -346,7 +383,7 @@ const int RIGHT_RECEIVE = 4;</code></pre>
     <strong>not</strong> applied to a loaded ring3 program's own code+data
     image: the loader still flattens a whole compiled program into one
     contiguous blob with no tracked code/data boundary (see
-    <a href="#compiled-ring3">Compiled MiniC in ring 3</a>), so a real
+    <a href="#compiled-ring3">Compiled C in ring 3</a>), so a real
     W^X split within a loaded image remains open — see
     <a href="#limitations">Known limitations</a>.
 </p>
@@ -363,33 +400,35 @@ const int RIGHT_RECEIVE = 4;</code></pre>
 
 <h2 id="native-api">The native API</h2>
 <p>
-    Ring3 processes are real, <code>minicc</code>-compiled MiniC programs
-    (see <a href="#compiled-ring3">below</a>), and the native API is real
-    <code>obj.method()</code> syntax wrapping the syscalls above — not raw
-    syscall numbers.
+    Ring3 processes are real, gcc-compiled C programs (see
+    <a href="#compiled-ring3">below</a>), and the native API is a plain C
+    function taking an explicit <code>self</code> pointer wrapping the
+    syscalls above — not raw syscall numbers, and not method-call syntax
+    (that was a MiniC-era feature; <code>self.method(args)</code> becomes
+    <code>type_method(&amp;self, args)</code> in C).
 </p>
 <div class="code-label">file — whole-file, path-based (no open/close/seek at the kernel level)</div>
-<pre><code>struct file { char* path; }
+<pre><code>typedef struct { char* path; } file;
 
-u64 file.write(file* self, char* buf, u64 len);
-u64 file.read(file* self, char* buf, u64 max_len);</code></pre>
+u64 file_write(file* self, char* buf, u64 len);
+u64 file_read(file* self, char* buf, u64 max_len);</code></pre>
 <div class="code-label">channel</div>
-<pre><code>struct channel { int handle; }
+<pre><code>typedef struct { int handle; } channel;
 
-bool channel.open(channel* self, int channel_index);   // grants RIGHT_RECEIVE only
-bool channel.send(channel* self, u64 value);           // fails without RIGHT_SEND
-u64  channel.receive(channel* self);   // blocks; fails without RIGHT_RECEIVE</code></pre>
+bool channel_open(channel* self, int channel_index);   // grants RIGHT_RECEIVE only
+bool channel_send(channel* self, u64 value);           // fails without RIGHT_SEND
+u64  channel_receive(channel* self);   // blocks; fails without RIGHT_RECEIVE</code></pre>
 <div class="code-label">process — path-based, spawn only</div>
-<pre><code>struct process { char* path; }
+<pre><code>typedef struct { char* path; } process;
 
-u64 process.spawn(process* self, u64 load_vaddr, u64 stack_vaddr);
+u64 process_spawn(process* self, u64 load_vaddr, u64 stack_vaddr);
 // returns the new process's task index, or -1</code></pre>
 <div class="code-label">process_handle — handle-based, query an already-running task (milestone 27)</div>
-<pre><code>struct process_handle { int handle; }
+<pre><code>typedef struct { int handle; } process_handle;
 
-bool process_handle.open(process_handle* self, int task_index, int requested_rights);
+bool process_handle_open(process_handle* self, int task_index, int requested_rights);
 // grants requested_rights &amp; RIGHT_QUERY - the only right that's ever grantable
-u64  process_handle.query(process_handle* self);
+u64  process_handle_query(process_handle* self);
 // fails without RIGHT_QUERY; else returns the target's real task_index</code></pre>
 
 <h2 id="posix-shim">The POSIX-shaped shim</h2>
@@ -397,7 +436,7 @@ u64  process_handle.query(process_handle* self);
     <code>open</code>/<code>read</code>/<code>write</code>/<code>close</code>
     — plain free functions, deliberately not methods, matching POSIX's
     real API shape rather than extending the native OO-style one.
-    Implemented <strong>entirely in ring3 MiniC</strong>, with no new
+    Implemented <strong>entirely in ring3 C</strong>, with no new
     syscalls and no kernel changes: since <code>file</code> is whole-file
     only, <code>open()</code> loads (or starts) a per-fd in-memory buffer
     once, <code>read()</code>/<code>write()</code> serve out of it while
@@ -415,29 +454,46 @@ int close(int fd);</code></pre>
     table.
 </div>
 
-<h2 id="compiled-ring3">Compiled MiniC in ring 3</h2>
+<h2 id="compiled-ring3">Compiled C in ring 3</h2>
 <p>
-    Ring3 programs are real, <code>minicc --freestanding</code>-compiled
-    MiniC — not hand-assembled machine code. The loader's model is
-    dead-simple (copy one contiguous byte range, jump to its first byte),
-    which doesn't survive unmodified for compiled output: string literals
-    land in <code>.rodata</code> and globals in <code>.bss</code>/
-    <code>.data</code>, separate ELF sections that a normal multi-object
-    link would scatter apart. Fixed with a build-step, not a
-    compiler-level, change: the ring3 program gets its own
-    <strong>standalone link</strong> (<code>proc/ring3.ld</code>, every
-    section placed contiguously) and gets flattened with
+    Ring3 programs are real, gcc-compiled C — not hand-assembled machine
+    code (originally real <code>minicc --freestanding</code>-compiled
+    MiniC, milestone 21; rewritten to C along with the rest of the
+    kernel). The loader's model is dead-simple (copy one contiguous byte
+    range, jump to its first byte), which doesn't survive unmodified for
+    compiled output: string literals land in <code>.rodata</code> and
+    globals in <code>.bss</code>/<code>.data</code>, separate ELF sections
+    that a normal multi-object link would scatter apart. Fixed with a
+    build-step, not a compiler-level, change: the ring3 program gets its
+    own <strong>standalone link</strong> (<code>proc/ring3.ld</code>,
+    every section placed contiguously) and gets flattened with
     <code>objcopy -O binary</code> before being embedded — the loader
     itself never changed.
 </p>
 <p>
-    <code>asm(...)</code> has no operand binding, so a syscall's arguments
-    can't be received in a register and used immediately — a small
-    <code>do_syscall(num, arg1, arg2, arg3)</code> helper stages them into
-    globals first, then one <code>asm(...)</code> block loads them into
-    <code>rax</code>/<code>rdi</code>/<code>rsi</code>/<code>rdx</code>
-    right before <code>int 0x80</code>.
+    Real GCC inline asm has real operand binding, so <code>do_syscall(num,
+    arg1, arg2, arg3)</code> loads its arguments straight into
+    <code>rax</code>/<code>rdi</code>/<code>rsi</code>/<code>rdx</code> in
+    one <code>__asm__</code> block right before <code>int 0x80</code> — a
+    genuine simplification over the MiniC-era version, whose
+    operand-less <code>asm(...)</code> had to stage every argument through
+    global variables first.
 </p>
+<div class="note">
+    A real, C-specific bug was found and fixed during the rewrite:
+    <code>spawn_process()</code>'s loader always jumps to byte 0 of the
+    loaded image — true by construction under MiniC's own single-pass
+    codegen, which always placed the entry function first, but not
+    guaranteed under gcc, which lays out <code>.text</code> in whatever
+    order suits it. Confirmed via <code>nm</code> showing <code>_start</code>
+    landing at a nonzero offset with a different function sitting at
+    offset 0 instead — the CPU ran straight into that function's body as
+    if it were the entry point. Fixed with a dedicated linker-script
+    section (<code>ring3.ld</code>'s <code>.text.start</code>) plus
+    <code>__attribute__((section(".text.start")))</code> directly on
+    <code>_start()</code>, pinning it to offset 0 regardless of source
+    order or any future gcc reordering.
+</div>
 
 <h2 id="pci">Hardware discovery: PCI</h2>
 <p>
@@ -447,10 +503,10 @@ int close(int fd);</code></pre>
     ATA) just assumes its device sits at a well-known legacy address.
     That stops working the moment a device's location genuinely isn't
     fixed, which is exactly true of a NIC — networking's real
-    prerequisite. <code>drivers/pci.mc</code> walks the legacy
+    prerequisite. <code>drivers/pci.c</code> walks the legacy
     <code>CONFIG_ADDRESS</code>/<code>CONFIG_DATA</code> mechanism
     (I/O ports <code>0xCF8</code>/<code>0xCFC</code>, <code>drivers/
-    io.mc</code>'s new 32-bit <code>outl</code>/<code>inl</code> — PCI
+    io.c</code>'s new 32-bit <code>outl</code>/<code>inl</code> — PCI
     config space is dword-addressed) across all 32 device slots on bus
     0, checking function 0 of each and only probing functions 1–7 for
     devices whose header-type byte marks them multi-function.
@@ -473,7 +529,7 @@ int close(int fd);</code></pre>
     <code>0x8086:0x7000</code>/<code>0x7010</code>/<code>0x7113</code>
     (PIIX3 ISA bridge / IDE controller / PIIX4 ACPI bridge —
     <code>0x7010</code> is literally the same IDE controller
-    <code>disk/ata.mc</code> already talks to by hardcoded port),
+    <code>disk/ata.c</code> already talks to by hardcoded port),
     <code>0x1234:0x1111</code> (the Bochs/QEMU standard VGA device), and
     <code>0x8086:0x100e</code> — a real Intel e1000 gigabit NIC, found
     with zero extra QEMU flags, and the next Phase X milestone's target
@@ -494,14 +550,14 @@ int close(int fd);</code></pre>
 <p>
     Unlike every earlier driver in this kernel, the e1000's real
     register file isn't reached through port I/O — it's
-    <strong>memory-mapped</strong> (MMIO). <code>net/e1000.mc</code>
-    enables the device over PCI (<code>drivers/pci.mc</code>'s new
+    <strong>memory-mapped</strong> (MMIO). <code>net/e1000.c</code>
+    enables the device over PCI (<code>drivers/pci.c</code>'s new
     <code>pci_config_write_dword()</code> — this kernel's first PCI config
     space <em>write</em>, every earlier use was read-only — sets Memory
     Space + Bus Master in the command register), reads BAR0
     (<code>pci_read_bar0()</code>) to find the device's real physical MMIO
     base, and maps 8 pages of it into the kernel's own address space via
-    <code>mm/paging.mc</code>'s ordinary <code>map_page()</code> — the
+    <code>mm/paging.c</code>'s ordinary <code>map_page()</code> — the
     first time this kernel has mapped device registers rather than RAM,
     though the mapping mechanism itself doesn't distinguish the two.
 </p>
@@ -547,7 +603,7 @@ int close(int fd);</code></pre>
     a buffer, hands a descriptor to the hardware, and polls the
     descriptor's own DD (descriptor done) status bit — the hardware's own
     confirmation it genuinely completed the transmission, the same
-    bounded-poll, fail-clean discipline <code>disk/ata.mc</code>'s
+    bounded-poll, fail-clean discipline <code>disk/ata.c</code>'s
     <code>ata_wait_ready</code>/<code>ata_wait_drq</code> already established.
     <code>e1000_receive()</code> is the RX-side equivalent.
 </p>
@@ -567,7 +623,7 @@ int close(int fd);</code></pre>
     and got back nothing. Not a driver bug — a measurement one. A tight
     spin loop doesn't reliably correspond to any particular amount of
     real wall-clock time, and a genuine external SLIRP round trip needs
-    real time to happen. Fixed by polling against <code>isr/isr.mc</code>'s
+    real time to happen. Fixed by polling against <code>isr/isr.c</code>'s
     own <code>g_tick_count</code> instead of a raw iteration count — the
     same underlying lesson this project's QEMU/TCG timer-rate gotcha
     already taught, applied to a new context.
@@ -586,7 +642,7 @@ int close(int fd);</code></pre>
 <p>
     Milestone 32 replaces milestone 31's own hardcoded one-shot ARP
     request/reply with a genuine resolver, built directly on the proven
-    TX/RX plumbing rather than starting over. <code>net/arp.mc</code>
+    TX/RX plumbing rather than starting over. <code>net/arp.c</code>
     keeps a fixed-size cache (<code>ArpEntry[8]</code>) and exposes one
     real entry point, <code>arp_resolve(ip, mac_out)</code>: check the
     cache first; only on a miss, send a real request and poll for a
@@ -598,7 +654,7 @@ int close(int fd);</code></pre>
 </p>
 <p>
     Deliberately scoped as a <strong>client (resolver) only</strong>, not
-    a responder — this kernel's own IP address (<code>net/ip.mc</code>'s
+    a responder — this kernel's own IP address (<code>net/ip.c</code>'s
     <code>g_my_ip</code>, milestone 33) is a fixed, static assumption, not
     real DHCP-negotiated configuration, so answering "who has &lt;our
     address&gt;" for an address nothing actually negotiated doesn't mean
@@ -631,20 +687,20 @@ int close(int fd);</code></pre>
     independently meaningful response.
 </p>
 <p>
-    <code>net/ip.mc</code> holds <code>ip_checksum()</code> (the real RFC
+    <code>net/ip.c</code> holds <code>ip_checksum()</code> (the real RFC
     791 one's-complement checksum — sum every 16-bit word, fold any
     carry back in, take the complement; the identical algorithm also
     covers ICMP) and <code>ip_build_header()</code> (a real 20-byte,
     no-options IPv4 header). It also holds <code>g_my_ip</code> — this
     kernel's own first real, named concept of "my IP address."
-    Previously a bare literal duplicated inside <code>net/arp.mc</code>'s
+    Previously a bare literal duplicated inside <code>net/arp.c</code>'s
     own request-building code, it's now one shared value both files use
     (still a fixed, static assumption — <code>10.0.2.15</code>, QEMU
     SLIRP's conventional default guest address — not real DHCP-negotiated
     configuration; see <a href="#limitations">Known limitations</a>).
 </p>
 <p>
-    <code>net/icmp.mc</code>'s <code>icmp_ping()</code> resolves the
+    <code>net/icmp.c</code>'s <code>icmp_ping()</code> resolves the
     target's MAC via milestone 32's real <code>arp_resolve()</code> first
     (a cache hit costs nothing here), builds a real Ethernet+IPv4+ICMP
     echo request, sends it, and polls — real <code>g_tick_count</code>-
@@ -676,12 +732,12 @@ int close(int fd);</code></pre>
     separate hard problem, left for a later milestone.
 </p>
 <p>
-    <code>net/udp.mc</code>'s <code>udp_checksum()</code> covers a
+    <code>net/udp.c</code>'s <code>udp_checksum()</code> covers a
     12-byte "pseudo-header" (source IP, dest IP, a zero byte, the
     protocol number, and the UDP length) plus the real UDP header and
     payload — binding the checksum to the addresses it's actually being
     delivered between, unlike IP's own header checksum, which covers
-    only the 20 header bytes. It reuses <code>ip.mc</code>'s
+    only the 20 header bytes. It reuses <code>ip.c</code>'s
     <code>ip_checksum()</code> algorithm unchanged by assembling the
     pseudo-header and message into one scratch buffer first.
     <code>udp_send()</code>/<code>udp_receive()</code> follow the exact
@@ -689,7 +745,7 @@ int close(int fd);</code></pre>
     already established.
 </p>
 <p>
-    <code>net/dns.mc</code>'s <code>dns_query()</code> is the real
+    <code>net/dns.c</code>'s <code>dns_query()</code> is the real
     external verification vehicle — deliberately <strong>not</strong> a
     real DNS client (no response caching, no compression-pointer
     decoding, no record types beyond A), the same "one hardcoded
@@ -745,15 +801,16 @@ echo 'sendkey ret' | nc -U /tmp/qmon # enter</code></pre>
 <li><strong>Every fixed-size table in this kernel (tasks, processes, objects, handles, channels, mounts) has a small, arbitrary capacity</strong>, and most creation calls at boot don't check their own return value for success — harmless today (nothing is near its cap), a real bug class once boot-time setup grows further.</li>
 <li><strong>MiniFS is deliberately simple</strong> — flat namespace (no directories), a fixed 16-file cap, no delete/truncate/append, no journaling (a crash mid-write leaves partial state), and files can't safely be overwritten (only created fresh).</li>
 <li><strong>The ATA driver only supports the primary bus's master drive</strong>, polling rather than interrupt-driven — no secondary bus, no slave, no AHCI/NVMe.</li>
-<li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.mc</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
-<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arp_resolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. No TCP — a substantially bigger, genuinely separate hard problem (real connection state machine, sequence numbers, retransmission), still fully ahead. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.mc</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no compression-pointer decoding, no record types beyond A — it exists purely as an external test vehicle for UDP. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.mc</code> already established.</li>
+<li><s>No PCI enumeration</s> — <strong>fixed in milestone 29</strong> for bus 0 (see <a href="#pci">Hardware discovery: PCI</a>). <strong>Still open</strong>: no bridge recursion beyond bus 0, no general driver-registration framework. <code>disk/ata.c</code> also hasn't been retrofitted to use PCI discovery instead of its own hardcoded <code>0x1F0</code>, even though <code>pci</code> now finds that exact same controller.</li>
+<li><s>No NIC driver, no packet TX/RX</s> — <strong>both fixed as of milestones 30-31</strong> (see <a href="#e1000">The e1000 NIC driver</a>): the e1000 is PCI-enabled, MMIO-mapped, and moves real packets through real TX/RX descriptor rings, verified with a genuine external round trip through QEMU's own network backend. <s>No real ARP subsystem</s> — <strong>fixed in milestone 32</strong> (see <a href="#arp">A real ARP resolver</a>): a genuine cache, <code>arp_resolve()</code> for any target address. <s>No IP layer</s> — <strong>fixed in milestone 33</strong> (see <a href="#ip">A real IP layer</a>): real IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP echo round trip. <s>No UDP</s> — <strong>fixed in milestone 34</strong> (see <a href="#udp">A real UDP layer</a>): real pseudo-header checksums, verified with a genuine DNS query to QEMU's own resolver proxy. <strong>Still fully open</strong>: ARP remains client-only (no responder). This kernel's own IP address (<code>g_my_ip</code>) is a fixed, static assumption, not real DHCP-negotiated configuration. The ARP cache has no eviction/TTL. No TCP — a substantially bigger, genuinely separate hard problem (real connection state machine, sequence numbers, retransmission), still fully ahead. ICMP is the only IP-layer protocol implemented, and only its echo request/reply message type at that. <code>net/dns.c</code>'s <code>dns_query()</code> is deliberately not a real DNS client — no caching, no compression-pointer decoding, no record types beyond A — it exists purely as an external test vehicle for UDP. The rings are fixed-size (8 descriptors each), and both TX/RX poll rather than using the device's own interrupt capability — the same "poll first, interrupts later" precedent <code>disk/ata.c</code> already established.</li>
 </ul>
 
 </main>
 
 <footer>
-    MiniC OS is a hobby kernel project, written in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    MiniC OS is a hobby kernel project, hand-written in freestanding C
+    (originally built in MiniC through milestone 34 — see the
+    <a href="roadmap.html">Roadmap</a>). Source on
     <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 

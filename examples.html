@@ -34,7 +34,7 @@
 </p>
 
 <div class="code-label">boot + a few commands</div>
-<pre><code>Hello from a MiniC kernel!
+<pre><code>Hello from a C kernel!
 hello from a LOADED process! 0xc0ffee
 interrupts live
 hello from a LOADED process! 0xc0ffee
@@ -86,7 +86,7 @@ ping gateway ok=0x1 elapsed_ticks=0x64
 &gt; dns
 dns query ok=0x1 elapsed_ticks=0x74
 &gt; disk
-sector 1: MiniC ATA PIO driver - milestone 16 signature sector
+sector 1: ATA PIO driver test signature sector
 &gt; diskwrite
 write+readback verified, 512/512 bytes match
 &gt; mkfs
@@ -110,10 +110,10 @@ sent ring3 spawn trigger</code></pre>
 
 <h2>The boot-time ring3 process</h2>
 <p>
-    Before the shell even shows its first prompt, a real
-    <code>minicc</code>-compiled MiniC program (not hand-assembled) has
-    already been loaded into its own isolated address space and started
-    running in ring 3, preemptible by the timer like any other task. The
+    Before the shell even shows its first prompt, a real gcc-compiled
+    program (not hand-assembled) has already been loaded into its own
+    isolated address space and started running in ring 3, preemptible by
+    the timer like any other task. The
     two <code>hello from a LOADED process!</code> lines are printed from
     <em>inside that loaded, executing code</em> via a real <code>int 0x80</code>
     syscall — a message that lives inside the loaded blob itself, not a
@@ -133,10 +133,11 @@ sent ring3 spawn trigger</code></pre>
 <p>
     The <code>File.write()</code>/<code>File.read()</code> and
     <code>POSIX</code> lines are the native API and the POSIX shim, both
-    exercised from inside that same ring3 process — real
-    <code>obj.method()</code> calls (<code>msg_file.write(...)</code>) and
-    real free-function calls (<code>write(fd, ...)</code>) wrapping two
-    different syscalls, not raw syscall numbers either way. The two
+    exercised from inside that same ring3 process — real C function calls
+    (<code>file_write(&amp;msg_file, ...)</code>, a plain function taking an
+    explicit <code>self</code> pointer) and real free-function calls
+    (<code>write(fd, ...)</code>) wrapping two different syscalls, not raw
+    syscall numbers either way. The two
     separate <code>POSIX read()</code> lines return two different,
     correct slices of the same underlying buffer — proof the position
     cursor genuinely advances between calls, not just replaying the whole
@@ -239,7 +240,7 @@ sent ring3 spawn trigger</code></pre>
     same shape as <code>pci</code>'s: checkable against a value this
     kernel had no part in producing. <code>52:54:00:12:34:56</code> is
     QEMU's own well-known, publicly documented default NIC MAC address —
-    reading it back correctly means <code>net/e1000.mc</code> genuinely
+    reading it back correctly means <code>net/e1000.c</code> genuinely
     enabled the device over PCI, correctly found and mapped its real
     physical MMIO register file (not RAM — the first device-register
     mapping this kernel has ever done), and pulled real hardware state
@@ -256,7 +257,7 @@ sent ring3 spawn trigger</code></pre>
 <h2>A real ARP resolver</h2>
 <p>
     <code>arp</code> is milestone 32's proof, exercising the real
-    <code>net/arp.mc</code> resolver instead of milestone 31's own
+    <code>net/arp.c</code> resolver instead of milestone 31's own
     hardcoded one-shot flow — four separate, independently checkable
     claims in one command. <code>resolve gateway ok=0x1
     mac=52:55:0a:00:02:02</code> is a genuine external round trip, the
@@ -297,7 +298,7 @@ sent ring3 spawn trigger</code></pre>
     trip through the full stack built so far: ARP resolution, real IPv4
     header construction, a real checksum, and a real Ethernet send/
     receive, all in one command. <code>ok=0x1</code> means
-    <code>net/icmp.mc</code>'s <code>icmp_ping()</code> got back a reply
+    <code>net/icmp.c</code>'s <code>icmp_ping()</code> got back a reply
     that matched on <em>every</em> real, independently meaningful field —
     the right EtherType, the right IP protocol number, the right source
     IP, the right ICMP type (echo reply, not some other ICMP message),
@@ -317,9 +318,9 @@ sent ring3 spawn trigger</code></pre>
 </p>
 <p>
     This is also the first milestone in this whole project to give the
-    kernel a real, explicit "my IP address" (<code>net/ip.mc</code>'s
+    kernel a real, explicit "my IP address" (<code>net/ip.c</code>'s
     <code>g_my_ip</code>) — previously a bare literal duplicated inside
-    <code>arp.mc</code>'s own request-building code, now one shared,
+    <code>arp.c</code>'s own request-building code, now one shared,
     named value both files use.
 </p>
 
@@ -330,7 +331,7 @@ sent ring3 spawn trigger</code></pre>
     genuine DNS query to QEMU SLIRP's built-in resolver proxy
     (<code>10.0.2.3</code>, the same address <code>arp</code> already
     resolved back in milestone 32). <code>ok=0x1</code> means
-    <code>net/dns.mc</code>'s <code>dns_query()</code> got back a response
+    <code>net/dns.c</code>'s <code>dns_query()</code> got back a response
     matching the exact transaction ID this query sent, with the response
     (QR) bit set, and at least one real answer record — meaning SLIRP's
     proxy genuinely forwarded the query to a real upstream resolver and
@@ -507,7 +508,7 @@ Channel.receive() got trigger 0x3
 attempting to execute ring3 stack byte at 0x80020000
 page fault at 0x80020000, error_code=0x15, halting</code></pre>
 <p>
-    If <code>PAGE_NX</code> (<code>mm/paging.mc</code>) weren't actually
+    If <code>PAGE_NX</code> (<code>mm/paging.c</code>) weren't actually
     enforced on the stack mapping, this would be completely harmless — a
     bare <code>ret</code> just pops the return address the preceding
     <code>call</code> pushed and jumps straight back — so the
@@ -525,8 +526,9 @@ page fault at 0x80020000, error_code=0x15, halting</code></pre>
 </main>
 
 <footer>
-    MiniC OS is a hobby kernel project, written in
-    <a href="https://github.com/milosursulovic/minic">MiniC</a>. Source on
+    MiniC OS is a hobby kernel project, hand-written in freestanding C
+    (originally built in MiniC through milestone 34 — see the
+    <a href="roadmap.html">Roadmap</a>). Source on
     <a href="https://github.com/milosursulovic/minic-os">GitHub</a>.
 </footer>
 
